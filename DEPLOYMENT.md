@@ -1,68 +1,84 @@
-# 🚀 Deploy Puppeteer Service to Koyeb
+# Puppeteer Service Deployment
 
-## ✅ Local Testing Completed Successfully!
-- Health endpoint: ✅ Working
-- Audit functionality: ✅ Working (tested with example.com)
-- PDF generation: ✅ Working (generated test-report.pdf)
-- Authentication: ✅ Working
+## 🎉 Successfully Deployed to Koyeb!
 
-## 📋 Deployment Steps
+The puppeteer audit service is now running on Koyeb platform.
 
-### 1. Install Koyeb CLI
-Visit: https://github.com/koyeb/koyeb-cli/releases/latest
-Download the macOS binary and install it:
+### Service Details
+- **Service ID**: `3e5995df`
+- **App Name**: `puppeteer-audit-service`
+- **Status**: `HEALTHY` ✅
+- **Public URL**: `https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app`
+- **Region**: `fra` (Frankfurt)
+- **Instance Type**: `nano`
+- **Auto-scaling**: 1-2 instances based on 80% CPU usage
 
+### Available Endpoints
+
+#### Health Check
 ```bash
-# Manual installation
-curl -LO https://github.com/koyeb/koyeb-cli/releases/latest/download/koyeb-darwin-amd64
-chmod +x koyeb-darwin-amd64
-sudo mv koyeb-darwin-amd64 /usr/local/bin/koyeb
+GET https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app/health
 ```
 
-### 2. Login to Koyeb
+#### Audit Endpoint
 ```bash
-koyeb auth login
+POST https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app/api/audit
+Content-Type: application/json
+X-Signature: <HMAC-SHA256 signature>
+
+{
+  "url": "https://example.com"
+}
 ```
 
-### 3. Create Secrets (IMPORTANT)
+#### PDF Generation Endpoint
 ```bash
-# Generate secure secrets for production
-koyeb secret create WEBHOOK_SECRET "$(openssl rand -hex 32)"
-koyeb secret create API_KEY "$(openssl rand -hex 32)"
-koyeb secret create CALLBACK_URL "https://your-app.vercel.app/api/audits/callback"
+POST https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app/api/pdf
+Content-Type: application/json
+X-Signature: <HMAC-SHA256 signature>
+
+{
+  "url": "https://example.com",
+  "options": { "format": "A4" }
+}
 ```
 
-### 4. Deploy the Service
+### Authentication
+All API endpoints (except `/health`) require HMAC-SHA256 authentication:
+- **Secret Key**: `6afe24f3b10d77a42ec30db83722a34fe4b99d75ed652a48687859b7fa8db492`
+- **Header**: `X-Signature`
+- **Payload**: Base64-encoded HMAC-SHA256 hash of the request body
+
+### Example Usage
 ```bash
-cd /Users/matthewmuchesko/Documents/meizo814/meizo/services/puppeteer-service
-koyeb app deploy
+# Generate signature
+BODY='{"url":"https://example.com"}'
+SIGNATURE=$(echo -n "$BODY" | openssl dgst -sha256 -hmac '6afe24f3b10d77a42ec30db83722a34fe4b99d75ed652a48687859b7fa8db492' -binary | base64)
+
+# Make request
+curl -X POST https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app/api/audit 
+  -H "Content-Type: application/json" 
+  -H "X-Signature: $SIGNATURE" 
+  -d "$BODY"
 ```
 
-## 🔐 Production Environment Variables
+### Monitoring
+- Service logs: `koyeb service logs 3e5995df`
+- Service status: `koyeb service get 3e5995df`
+- App status: `koyeb app get puppeteer-audit-service`
 
-Your koyeb.yaml is already configured to use these secrets:
-- `WEBHOOK_SECRET`: ${WEBHOOK_SECRET}
-- `API_KEY`: ${API_KEY}  
-- `CALLBACK_URL`: ${CALLBACK_URL}
+## Deployment Process Summary
 
-## 🎯 Next Steps After Deployment
+1. ✅ Created complete TypeScript service with Express.js
+2. ✅ Implemented Lighthouse audits and PDF generation
+3. ✅ Added HMAC authentication and security middleware
+4. ✅ Created Docker container with Chrome/Chromium
+5. ✅ Set up GitHub repository for source control
+6. ✅ Fixed TypeScript build issues in Dockerfile
+7. ✅ Successfully deployed to Koyeb platform
+8. ✅ Configured health checks and auto-scaling
+9. ✅ Verified service is running and accessible
 
-1. **Get your service URL**: `https://your-app-name.koyeb.app`
-2. **Test the deployed service**:
-   ```bash
-   curl https://your-app-name.koyeb.app/health
-   ```
-3. **Update your main app's environment variables**:
-   ```bash
-   PUPPETEER_SERVICE_URL=https://your-app-name.koyeb.app
-   PUPPETEER_API_KEY=your-generated-api-key
-   PUPPETEER_WEBHOOK_SECRET=your-generated-webhook-secret
-   ```
+## Migration from Render Complete! 🚀
 
-## 📊 Expected Performance
-- **Cold start**: ~10-15 seconds
-- **Warm requests**: <5 seconds for audits
-- **Auto-scaling**: 0-3 instances
-- **Cost**: $0 when idle, ~$10-20/month moderate usage
-
-Your service is ready for production deployment! 🚀
+The puppeteer audit service has been successfully migrated from Render to Koyeb platform. The service is now running efficiently with proper auto-scaling, health monitoring, and secure authentication.

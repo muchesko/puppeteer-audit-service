@@ -5,8 +5,9 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   
   // Security
-  webhookSecret: process.env.WEBHOOK_SECRET || 'default-secret',
-  apiKey: process.env.API_KEY || 'default-api-key',
+  apiSecretKey: process.env.API_SECRET_KEY || 'default-secret',
+  webhookSecret: process.env.WEBHOOK_SECRET || process.env.API_SECRET_KEY || 'default-secret',
+  apiKey: process.env.API_KEY || process.env.API_SECRET_KEY || 'default-api-key',
   
   // Callback
   callbackUrl: process.env.CALLBACK_URL || 'http://localhost:3000/api/audits/callback',

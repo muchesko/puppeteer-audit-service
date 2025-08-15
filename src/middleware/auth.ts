@@ -7,32 +7,30 @@ export interface AuthenticatedRequest extends Request {
 }
 
 export const authMiddleware = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const apiKey = req.headers['x-api-key'];
   const signature = req.headers['x-signature'] as string;
   
-  // Check API key
-  if (apiKey !== config.apiKey) {
-    return res.status(401).json({ error: 'Invalid API key' });
+  if (!signature) {
+    return res.status(401).json({ error: 'Missing signature header' });
   }
   
-  // Verify HMAC signature for webhook callbacks
-  if (req.path.includes('/callback') && signature) {
+  // Verify HMAC signature
+  try {
     const body = JSON.stringify(req.body);
     const expectedSignature = crypto
-      .createHmac('sha256', config.webhookSecret)
+      .createHmac('sha256', config.apiSecretKey)
       .update(body)
-      .digest('hex');
-    
-    const providedSignature = signature.replace('sha256=', '');
+      .digest('base64');
     
     if (!crypto.timingSafeEqual(
-      Buffer.from(expectedSignature, 'hex'),
-      Buffer.from(providedSignature, 'hex')
+      Buffer.from(expectedSignature),
+      Buffer.from(signature)
     )) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
     
     req.isValidSignature = true;
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid signature format' });
   }
   
   next();
