@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import crypto from 'crypto';
 
 const API_SECRET_KEY = '6afe24f3b10d77a42ec30db83722a34fe4b99d75ed652a48687859b7fa8db492';
 const BASE_URL = 'https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app';

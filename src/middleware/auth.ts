@@ -16,10 +16,10 @@ export const authMiddleware = (req: AuthenticatedRequest, res: Response, next: N
   // Verify HMAC signature
   try {
     const body = JSON.stringify(req.body);
-    const expectedSignature = crypto
+    const expectedSignature = `sha256=${crypto
       .createHmac('sha256', config.apiSecretKey)
       .update(body)
-      .digest('base64');
+      .digest('hex')}`;
     
     if (!crypto.timingSafeEqual(
       Buffer.from(expectedSignature),
