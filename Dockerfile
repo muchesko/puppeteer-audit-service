@@ -20,14 +20,17 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev dependencies for building)
+RUN npm ci
 
 # Copy source code
 COPY src/ ./src/
 
 # Build TypeScript
 RUN npm run build
+
+# Remove dev dependencies to reduce image size
+RUN npm prune --production
 
 # Set Chrome executable path
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
