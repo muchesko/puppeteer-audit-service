@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import * as crypto from 'crypto';
 import { AuditService } from '../services/auditService.js';
 
 const router = Router();
@@ -7,13 +8,12 @@ const auditService = new AuditService();
 
 // Request validation schemas
 const auditRequestSchema = z.object({
-  jobId: z.string().uuid(),
-  websiteUrl: z.string().url(),
+  url: z.string().url(),
   priority: z.number().min(1).max(10).optional().default(5),
   options: z.object({
     mobile: z.boolean().optional().default(false),
-    includeScreenshot: z.boolean().optional().default(true),
-    customUserAgent: z.string().optional()
+    desktop: z.boolean().optional().default(true),
+    screenshot: z.boolean().optional().default(true)
   }).optional().default({})
 });
 
@@ -47,19 +47,24 @@ const callbackSchema = z.object({
 router.post('/start', async (req: Request, res: Response) => {
   try {
     const validatedData = auditRequestSchema.parse(req.body);
+    const jobId = crypto.randomUUID();
     
-    console.log(`Starting audit for job ${validatedData.jobId}: ${validatedData.websiteUrl}`);
+    console.log(`Starting audit for job ${jobId}: ${validatedData.url}`);
     
     // Start audit asynchronously
-    auditService.processAudit(validatedData)
-      .catch(error => {
-        console.error(`Audit failed for job ${validatedData.jobId}:`, error);
+    auditService.startAudit({
+      jobId,
+      websiteUrl: validatedData.url,
+      priority: validatedData.priority,
+      options: validatedData.options
+    })
+      .catch((error: Error) => {
+        console.error(`Audit failed for job ${jobId}:`, error);
       });
     
-    res.json({ 
-      success: true, 
-      message: 'Audit started',
-      jobId: validatedData.jobId
+    res.status(202).json({ 
+      message: 'Audit started successfully',
+      jobId: jobId
     });
     
   } catch (error) {

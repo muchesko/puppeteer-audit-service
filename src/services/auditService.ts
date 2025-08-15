@@ -68,6 +68,11 @@ export class AuditService {
     return this.activeBrowser;
   }
 
+  async startAudit(request: AuditRequest): Promise<void> {
+    // Start processing the audit asynchronously
+    this.processAudit(request);
+  }
+
   async processAudit(request: AuditRequest): Promise<void> {
     this.jobStatuses.set(request.jobId, 'PROCESSING');
     

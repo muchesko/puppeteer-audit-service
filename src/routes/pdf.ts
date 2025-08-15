@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import * as crypto from 'crypto';
 import { PDFService } from '../services/pdfService.js';
 
 const router = Router();
@@ -7,8 +8,7 @@ const pdfService = new PDFService();
 
 // Request validation schemas
 const pdfRequestSchema = z.object({
-  jobId: z.string().uuid(),
-  htmlContent: z.string().min(1),
+  html: z.string().min(1),
   options: z.object({
     format: z.enum(['A4', 'Letter']).optional().default('A4'),
     orientation: z.enum(['portrait', 'landscape']).optional().default('portrait'),
@@ -30,13 +30,18 @@ const pdfRequestSchema = z.object({
 router.post('/generate', async (req: Request, res: Response) => {
   try {
     const validatedData = pdfRequestSchema.parse(req.body);
+    const jobId = crypto.randomUUID();
     
-    console.log(`Generating PDF for job ${validatedData.jobId}`);
+    console.log(`Generating PDF for job ${jobId}`);
     
-    const pdfBuffer = await pdfService.generatePDF(validatedData);
+    const pdfBuffer = await pdfService.generatePDF({
+      jobId,
+      htmlContent: validatedData.html,
+      options: validatedData.options
+    });
     
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="report-${validatedData.jobId}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="report-${jobId}.pdf"`);
     res.send(pdfBuffer);
     
   } catch (error) {
