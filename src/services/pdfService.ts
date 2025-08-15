@@ -37,16 +37,63 @@ export class PDFService {
           '--no-first-run',
           '--no-zygote',
           '--single-process',
-          '--disable-extensions'
-        ]
+          '--disable-extensions',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-ipc-flooding-protection',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--disable-default-apps',
+          '--no-default-browser-check',
+          '--no-pings',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--memory-pressure-off',
+          '--max_old_space_size=4096'
+        ],
+        timeout: 30000,
+        protocolTimeout: 30000
       });
     }
     return this.activeBrowser;
   }
 
   async generatePDF(request: PDFRequest): Promise<Buffer> {
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
+    // Add retry logic for browser launch
+    let browser: Browser;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        browser = await this.getBrowser();
+        break;
+      } catch (error) {
+        retryCount++;
+        console.warn(`Browser launch attempt ${retryCount} failed:`, error instanceof Error ? error.message : 'Unknown error');
+        
+        if (retryCount >= maxRetries) {
+          throw new Error(`Failed to launch browser after ${maxRetries} attempts`);
+        }
+        
+        // Clean up any existing browser
+        if (this.activeBrowser) {
+          try {
+            await this.activeBrowser.close();
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          this.activeBrowser = null;
+        }
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      }
+    }
+    
+    const page = await browser!.newPage();
     
     try {
       // Set content
@@ -84,8 +131,39 @@ export class PDFService {
   }
 
   async generatePDFFromURL(url: string, options?: PDFRequest['options']): Promise<Buffer> {
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
+    // Add retry logic for browser launch
+    let browser: Browser;
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        browser = await this.getBrowser();
+        break;
+      } catch (error) {
+        retryCount++;
+        console.warn(`Browser launch attempt ${retryCount} failed:`, error instanceof Error ? error.message : 'Unknown error');
+        
+        if (retryCount >= maxRetries) {
+          throw new Error(`Failed to launch browser after ${maxRetries} attempts`);
+        }
+        
+        // Clean up any existing browser
+        if (this.activeBrowser) {
+          try {
+            await this.activeBrowser.close();
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+          this.activeBrowser = null;
+        }
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      }
+    }
+    
+    const page = await browser!.newPage();
     
     try {
       // Navigate to URL
