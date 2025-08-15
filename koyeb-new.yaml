@@ -1,0 +1,30 @@
+name: audit-service
+regions:
+  - fra
+builder:
+  type: docker
+  dockerfile: Dockerfile
+env:
+  - name: NODE_ENV
+    value: production
+  - name: PORT
+    value: "8080"
+  - name: API_SECRET_KEY
+    secret: audit-secret-key
+  - name: CHROME_EXECUTABLE_PATH
+    value: /usr/bin/chromium
+  - name: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+    value: "true"
+instance_type: small
+autoscaling:
+  min: 1
+  max: 2
+healthcheck:
+  path: /health
+  grace_period: 180s
+  interval: 30s
+  timeout: 15s
+  restart_limit: 5
+ports:
+  - port: 8080
+    protocol: http
