@@ -198,8 +198,8 @@ async getBrowser(): Promise<Browser> {
                 }
 
                 // Set reasonable timeouts
-                await page.setDefaultTimeout(30000);      // Reduced from 60s
-                await page.setDefaultNavigationTimeout(30000); // Reduced from 60s
+                await page.setDefaultTimeout(45000);      // Increased for nano instances
+                await page.setDefaultNavigationTimeout(45000); // Increased for nano instances
 
                 // Run audit on the same page instance
                 const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
@@ -293,17 +293,18 @@ async getBrowser(): Promise<Browser> {
             while (navRetries < maxNavRetries) {
                 try {
                     try {
-                        response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                        // Most basic navigation - just wait for 'load' event with generous timeout
+                        response = await page.goto(url, { waitUntil: 'load', timeout: 45000 });
                     } catch {
-                        // Even simpler fallback - just load the page
-                        response = await page.goto(url, { waitUntil: 'load', timeout: 15000 });
+                        // If that fails, try with no wait conditions
+                        response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
                     }
                     if (response) break;
                 } catch (error) {
                     navRetries++;
                     console.warn(`Navigation attempt ${navRetries} failed:`, error);
                     if (navRetries >= maxNavRetries) throw error;
-                    await new Promise(r => setTimeout(r, 1000)); // Reduced wait time
+                    await new Promise(r => setTimeout(r, 2000)); // Increased wait time
                 }
             }
 

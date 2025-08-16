@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 const KOYEB_BASE_URL = 'https://puppeteer-audit-service-meizo-a4e1146c.koyeb.app';
 const API_KEY = 'test-api-key';
-const API_SECRET_KEY = 'default-secret'; // This is what the config uses as default
+const API_SECRET_KEY = '6afe24f3b10d77a42ec30db83722a34fe4b99d75ed652a48687859b7fa8db492'; // Your actual Koyeb secret
 
 function generateSignature(body, secret) {
     return crypto.createHmac('sha256', secret).update(body).digest('hex');
