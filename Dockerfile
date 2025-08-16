@@ -1,3 +1,18 @@
+# ---------- base ----------
+FROM node:20-bookworm-slim AS base
+WORKDIR /app
+
+# ---------- deps (with dev deps for build) ----------
+FROM base AS deps
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
+
+# ---------- build ----------
+FROM deps AS build
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
 # ---------- runtime (Chrome + prod deps only) ----------
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
