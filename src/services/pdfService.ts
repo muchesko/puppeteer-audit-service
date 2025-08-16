@@ -72,7 +72,9 @@ export class PDFService {
         break;
       } catch (error) {
         retryCount++;
-        console.warn(`Browser launch attempt ${retryCount} failed:`, error instanceof Error ? error.message : 'Unknown error');
+        console.error(`Browser launch attempt ${retryCount} failed:`, error);
+        console.error('Chrome executable path:', config.chromeExecutablePath);
+        console.error('Error details:', error instanceof Error ? error.stack : error);
         
         if (retryCount >= maxRetries) {
           throw new Error(`Failed to launch browser after ${maxRetries} attempts`);
@@ -142,7 +144,9 @@ export class PDFService {
         break;
       } catch (error) {
         retryCount++;
-        console.warn(`Browser launch attempt ${retryCount} failed:`, error instanceof Error ? error.message : 'Unknown error');
+        console.error(`Browser launch attempt ${retryCount} failed:`, error);
+        console.error('Chrome executable path:', config.chromeExecutablePath);
+        console.error('Error details:', error instanceof Error ? error.stack : error);
         
         if (retryCount >= maxRetries) {
           throw new Error(`Failed to launch browser after ${maxRetries} attempts`);
