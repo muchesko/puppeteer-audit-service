@@ -97,10 +97,13 @@ router.get('/status/:jobId', async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
     const status = await auditService.getAuditStatus(jobId);
+    const details = await auditService.getAuditDetails(jobId);
     
     res.json({ 
       jobId,
-      status: status || 'NOT_FOUND'
+      status: status || 'NOT_FOUND',
+      results: details?.results,
+      error: details?.error
     });
     
   } catch (error) {

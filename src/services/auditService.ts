@@ -42,6 +42,7 @@ export interface AuditResult {
 export class AuditService {
   private activeBrowser: Browser | null = null;
   private jobStatuses = new Map<string, string>();
+  private jobResults = new Map<string, AuditResult>();
 
   async getBrowser(): Promise<Browser> {
     if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
@@ -179,7 +180,7 @@ export class AuditService {
       await page.close();
       
       // Process results
-      const auditResult: AuditResult = {
+  const auditResult: AuditResult = {
         jobId: request.jobId,
         status: 'COMPLETED',
         results: {
@@ -195,6 +196,7 @@ export class AuditService {
       };
       
       this.jobStatuses.set(request.jobId, 'COMPLETED');
+  this.jobResults.set(request.jobId, auditResult);
       
       console.log(`Audit completed for job ${request.jobId}:`, {
         performance: auditResult.results?.performanceScore,
@@ -209,13 +211,14 @@ export class AuditService {
     } catch (error) {
       console.error(`Audit failed for job ${request.jobId}:`, error);
       
-      const auditResult: AuditResult = {
+  const auditResult: AuditResult = {
         jobId: request.jobId,
         status: 'FAILED',
         error: error instanceof Error ? error.message : 'Unknown error'
       };
       
       this.jobStatuses.set(request.jobId, 'FAILED');
+  this.jobResults.set(request.jobId, auditResult);
       
       console.log(`Audit failed for job ${request.jobId}:`, error instanceof Error ? error.message : 'Unknown error');
       
@@ -385,6 +388,10 @@ export class AuditService {
 
   async getAuditStatus(jobId: string): Promise<string | null> {
     return this.jobStatuses.get(jobId) || null;
+  }
+
+  async getAuditDetails(jobId: string): Promise<AuditResult | null> {
+    return this.jobResults.get(jobId) || null;
   }
 
   async cleanup(): Promise<void> {
