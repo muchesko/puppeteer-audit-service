@@ -59,81 +59,36 @@ export class AuditService {
           '--no-zygote',
           '--single-process',
           
-          // Network and connectivity fixes - Critical for Koyeb
+          // Minimal set of flags for stability in nano instances
           '--disable-web-security',
           '--disable-features=VizDisplayCompositor',
+          '--disable-extensions',
+          '--disable-default-apps',
+          '--disable-sync',
           '--disable-background-networking',
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
           '--disable-renderer-backgrounding',
-          '--disable-ipc-flooding-protection',
-          
-          // DevTools protocol stability - use pipe instead of websocket
-          '--disable-dev-tools',
-          '--disable-gpu-sandbox',
-          '--disable-software-rasterizer',
-          '--disable-background-mode',
-          
-          // Chrome stability flags
-          '--disable-extensions',
-          '--disable-default-apps',
-          '--disable-sync',
-          '--no-default-browser-check',
-          '--no-pings',
-          '--disable-features=TranslateUI',
-          '--disable-component-update',
-          '--disable-client-side-phishing-detection',
-          '--disable-hang-monitor',
-          '--disable-popup-blocking',
-          '--disable-prompt-on-repost',
-          '--disable-translate',
-          '--metrics-recording-only',
-          '--safebrowsing-disable-auto-update',
-          '--enable-automation',
-          '--password-store=basic',
-          '--use-mock-keychain',
-          
-          // Memory and performance optimizations
           '--memory-pressure-off',
-          '--max_old_space_size=4096',
-          '--js-flags="--max-old-space-size=4096"',
-          
-          // Additional fixes for containerized environments
-          '--disable-accelerated-2d-canvas',
-          '--disable-accelerated-jpeg-decoding',
-          '--disable-accelerated-mjpeg-decode',
-          '--disable-accelerated-video-decode',
-          '--disable-gpu-rasterization',
-          '--disable-gpu-memory-buffer-video-frames',
-          
-          // Networking and process management fixes
-          '--disable-features=VizDisplayCompositor,VizHitTestSurfaceLayer',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-component-extensions-with-background-pages',
-          '--disable-default-apps',
+          '--disable-ipc-flooding-protection',
+          '--disable-hang-monitor',
+          '--disable-prompt-on-repost',
+          '--disable-component-update',
           '--disable-domain-reliability',
           '--disable-features=AudioServiceOutOfProcess',
-          '--disable-print-preview',
-          '--disable-speech-api',
+          '--disable-features=TranslateUI',
+          '--enable-automation',
           '--hide-scrollbars',
-          '--mute-audio',
-          '--no-default-browser-check',
-          '--no-first-run',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--disable-background-timer-throttling',
-          '--force-color-profile=srgb',
-          '--disable-canvas-aa',
-          '--disable-2d-canvas-clip-aa'
+          '--mute-audio'
         ],
-        timeout: 60000, // Increased timeout for slower containers
-        protocolTimeout: 60000, // Increased protocol timeout
+        timeout: 30000, // Reduced timeout for faster feedback
+        protocolTimeout: 30000,
         handleSIGINT: false,
         handleSIGTERM: false,
         handleSIGHUP: false,
-        dumpio: false, // Disable dumping IO to reduce noise
-        pipe: true, // Use pipe instead of WebSocket for more reliable connection
-        slowMo: 100 // Add small delay between operations for stability
+        dumpio: false,
+        pipe: false, // Back to WebSocket - pipe seems to have issues in this environment
+        slowMo: 50 // Reduced from 100ms to be less aggressive
       });
     }
     return this.activeBrowser;
