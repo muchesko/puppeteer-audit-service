@@ -1,19 +1,19 @@
 FROM node:20-bookworm
 
-# Install system Chrome and required libraries
-RUN apt-get update && apt-get install -y wget gnupg ca-certificates \
-  && install -d -m 0755 /etc/apt/keyrings \
-  && wget -qO- https://dl.google.com/linux/linux_signing_key.pub \
-    | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
-  && sh -c 'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list' \
-  && apt-get update && apt-get install -y \
-    google-chrome-stable \
-    fonts-liberation libasound2 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 \
+# Install required libraries for Chromium (bundled with Puppeteer)
+RUN apt-get update && apt-get install -y \
+    # Core libraries for Chromium
+    libasound2 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 \
     libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 \
     libnspr4 libnss3 libx11-6 libx11-xcb1 libxcb1 \
     libxcomposite1 libxdamage1 libxext6 libxfixes3 \
-    libxrandr2 libxshmfence1 xdg-utils \
-    curl \
+    libxrandr2 libxshmfence1 \
+    # Additional X11 and graphics libraries
+    libxss1 libgconf-2-4 libxtst6 libxss1 \
+    # Font support
+    fonts-liberation fonts-dejavu-core \
+    # Utilities
+    ca-certificates curl \
     --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
@@ -23,7 +23,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install all dependencies (including dev dependencies for building)
+# Install all dependencies (Puppeteer will download bundled Chromium)
 RUN npm ci
 
 # Copy source code and build
@@ -35,8 +35,8 @@ RUN npm prune --production
 
 # Environment variables
 ENV NODE_ENV=production
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+# Don't set PUPPETEER_EXECUTABLE_PATH - use bundled Chromium
+# ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false (default)
 
 # Expose port
 EXPOSE 8080

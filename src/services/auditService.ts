@@ -49,24 +49,15 @@ export class AuditService {
 
   async getBrowser(): Promise<Browser> {
     if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
-      const useSystemChrome = Boolean(config.chromeExecutablePath);
-
-      // Validate system Chrome path if configured
-      if (useSystemChrome) {
-        if (!fs.existsSync(config.chromeExecutablePath)) {
-          throw new Error(`Chrome not found at ${config.chromeExecutablePath}`);
-        }
-      }
-
       console.log({
         node: process.version,
-        executablePath: config.chromeExecutablePath || 'bundled',
+        executablePath: 'bundled-chromium',
         pipeMode: true,
         timestamp: new Date().toISOString()
       });
 
       const launchOpts = {
-        headless: true, // Use boolean instead of 'new'
+        headless: true,
         pipe: true, // Use pipe instead of WebSocket for reliability
         args: [
           '--no-sandbox',
@@ -75,12 +66,11 @@ export class AuditService {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu'
-          // Removed all the problematic flags
         ],
         timeout: 30000,
         protocolTimeout: 30000,
-        dumpio: true, // Enable verbose logging
-        ...(useSystemChrome && { executablePath: config.chromeExecutablePath })
+        dumpio: false // Reduce noise
+        // No executablePath - use bundled Chromium
       };
 
       this.activeBrowser = await puppeteer.launch(launchOpts);
