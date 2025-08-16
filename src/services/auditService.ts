@@ -90,8 +90,9 @@ async getBrowser(): Promise<Browser> {
       '--disable-extensions',
       '--disable-software-rasterizer',
       '--user-data-dir=/tmp/chrome-data',
-      '--single-process',
-      '--renderer-process-limit=1'
+      //'--single-process',
+      '--renderer-process-limit=1',
+      '--no-proxy-server',
       // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
     ];
 
