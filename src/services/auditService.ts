@@ -92,8 +92,6 @@ async getBrowser(): Promise<Browser> {
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-zygote',
-      '--single-process', // Enable single-process mode for nano instances
-      '--disable-features=TranslateUI,VizDisplayCompositor',
       '--disable-background-networking',
       '--disable-sync',
       '--disable-background-timer-throttling',
@@ -110,12 +108,7 @@ async getBrowser(): Promise<Browser> {
       '--disable-accelerated-2d-canvas',
       '--disable-accelerated-video-decode',
       '--user-data-dir=/tmp/chrome-data',
-      '--max_old_space_size=256', // Limit V8 heap size
-      '--memory-pressure-off',
-      '--renderer-process-limit=1',
-      '--no-proxy-server',
-      '--disable-web-security', // For faster loading
-      '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess',
+      '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess,TranslateUI',
       // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
     ];
 
@@ -125,9 +118,9 @@ async getBrowser(): Promise<Browser> {
       pipe: usePipe,         // false => WebSocket transport
       executablePath,
       args,
-      timeout: 60000,        // Reduced from 120s
-      protocolTimeout: 60000, // Reduced from 120s
-      dumpio: false          // Disable dumpio to reduce overhead
+      timeout: 120_000,        // Increased for nano instances
+      protocolTimeout: 180_000, // Significantly increased for nano instances
+      dumpio: true          // Disable dumpio to reduce overhead
     };
 
     this.activeBrowser = await puppeteer.launch(launchOpts);
@@ -198,8 +191,8 @@ async getBrowser(): Promise<Browser> {
                 }
 
                 // Set reasonable timeouts
-                await page.setDefaultTimeout(45000);      // Increased for nano instances
-                await page.setDefaultNavigationTimeout(45000); // Increased for nano instances
+                await page.setDefaultTimeout(60000);      // Increased for protocol delays
+                await page.setDefaultNavigationTimeout(60000); // Increased for protocol delays
 
                 // Run audit on the same page instance
                 const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
@@ -294,17 +287,17 @@ async getBrowser(): Promise<Browser> {
                 try {
                     try {
                         // Most basic navigation - just wait for 'load' event with generous timeout
-                        response = await page.goto(url, { waitUntil: 'load', timeout: 45000 });
+                        response = await page.goto(url, { waitUntil: 'load', timeout: 60000 });
                     } catch {
                         // If that fails, try with no wait conditions
-                        response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+                        response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 45000 });
                     }
                     if (response) break;
                 } catch (error) {
                     navRetries++;
                     console.warn(`Navigation attempt ${navRetries} failed:`, error);
                     if (navRetries >= maxNavRetries) throw error;
-                    await new Promise(r => setTimeout(r, 2000)); // Increased wait time
+                    await new Promise(r => setTimeout(r, 3000)); // Longer wait for protocol stabilization
                 }
             }
 
