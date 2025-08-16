@@ -49,6 +49,7 @@ export class AuditService {
         headless: true,
         executablePath: config.chromeExecutablePath,
         args: [
+          // Security flags
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
@@ -56,24 +57,40 @@ export class AuditService {
           '--no-first-run',
           '--no-zygote',
           '--single-process',
-          '--disable-extensions',
+          
+          // Network and connectivity fixes
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--disable-background-networking',
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
           '--disable-renderer-backgrounding',
-          '--disable-features=TranslateUI',
           '--disable-ipc-flooding-protection',
-          '--disable-background-networking',
-          '--disable-sync',
+          
+          // Chrome stability flags
+          '--disable-extensions',
           '--disable-default-apps',
+          '--disable-sync',
           '--no-default-browser-check',
           '--no-pings',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
+          '--disable-features=TranslateUI',
+          
+          // Memory management
           '--memory-pressure-off',
-          '--max_old_space_size=4096'
+          '--max_old_space_size=4096',
+          
+          // Additional fixes for containerized environments
+          '--disable-dev-tools',
+          '--disable-gpu-sandbox',
+          '--disable-software-rasterizer',
+          '--remote-debugging-port=0',
+          '--disable-background-mode'
         ],
         timeout: 30000,
-        protocolTimeout: 30000
+        protocolTimeout: 30000,
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false
       });
     }
     return this.activeBrowser;
