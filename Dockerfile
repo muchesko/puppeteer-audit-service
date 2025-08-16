@@ -23,12 +23,15 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci --omit=dev
+# Install all dependencies (including dev dependencies for building)
+RUN npm ci
 
 # Copy source code and build
 COPY src/ ./src/
 RUN npm run build
+
+# Remove dev dependencies to reduce image size
+RUN npm prune --production
 
 # Environment variables
 ENV NODE_ENV=production
