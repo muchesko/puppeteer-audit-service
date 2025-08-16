@@ -68,8 +68,7 @@ export class AuditService {
           '--disable-renderer-backgrounding',
           '--disable-ipc-flooding-protection',
           
-          // DevTools protocol stability
-          '--remote-debugging-port=9222',
+          // DevTools protocol stability - use pipe instead of websocket
           '--disable-dev-tools',
           '--disable-gpu-sandbox',
           '--disable-software-rasterizer',
@@ -84,14 +83,11 @@ export class AuditService {
           '--disable-features=TranslateUI',
           '--disable-component-update',
           '--disable-client-side-phishing-detection',
-          '--disable-default-apps',
           '--disable-hang-monitor',
           '--disable-popup-blocking',
           '--disable-prompt-on-repost',
-          '--disable-sync',
           '--disable-translate',
           '--metrics-recording-only',
-          '--no-first-run',
           '--safebrowsing-disable-auto-update',
           '--enable-automation',
           '--password-store=basic',
@@ -108,7 +104,27 @@ export class AuditService {
           '--disable-accelerated-mjpeg-decode',
           '--disable-accelerated-video-decode',
           '--disable-gpu-rasterization',
-          '--disable-gpu-memory-buffer-video-frames'
+          '--disable-gpu-memory-buffer-video-frames',
+          
+          // Networking and process management fixes
+          '--disable-features=VizDisplayCompositor,VizHitTestSurfaceLayer',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-component-extensions-with-background-pages',
+          '--disable-default-apps',
+          '--disable-domain-reliability',
+          '--disable-features=AudioServiceOutOfProcess',
+          '--disable-print-preview',
+          '--disable-speech-api',
+          '--hide-scrollbars',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--no-first-run',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-background-timer-throttling',
+          '--force-color-profile=srgb',
+          '--disable-canvas-aa',
+          '--disable-2d-canvas-clip-aa'
         ],
         timeout: 60000, // Increased timeout for slower containers
         protocolTimeout: 60000, // Increased protocol timeout
@@ -116,7 +132,7 @@ export class AuditService {
         handleSIGTERM: false,
         handleSIGHUP: false,
         dumpio: false, // Disable dumping IO to reduce noise
-        pipe: false, // Use WebSocket instead of pipe for more reliable connection
+        pipe: true, // Use pipe instead of WebSocket for more reliable connection
         slowMo: 100 // Add small delay between operations for stability
       });
     }
