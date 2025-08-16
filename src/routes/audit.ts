@@ -8,6 +8,8 @@ const auditService = new AuditService();
 
 // Request validation schemas
 const auditRequestSchema = z.object({
+  // Allow the client (Meizo app) to provide the jobId so both systems share the same ID
+  jobId: z.string().uuid().optional(),
   url: z.string().url(),
   priority: z.number().min(1).max(10).optional().default(5),
   options: z.object({
@@ -47,7 +49,8 @@ const callbackSchema = z.object({
 router.post('/start', async (req: Request, res: Response) => {
   try {
     const validatedData = auditRequestSchema.parse(req.body);
-    const jobId = crypto.randomUUID();
+    // Use provided jobId when present so the caller can track status by the same ID
+    const jobId = validatedData.jobId || crypto.randomUUID();
     
     console.log(`Starting audit for job ${jobId}: ${validatedData.url}`);
     
@@ -56,7 +59,12 @@ router.post('/start', async (req: Request, res: Response) => {
       jobId,
       websiteUrl: validatedData.url,
       priority: validatedData.priority,
-      options: validatedData.options
+      // Normalize option name: router uses `screenshot`, service expects `includeScreenshot`
+      options: {
+        mobile: validatedData.options?.mobile,
+        customUserAgent: undefined,
+        includeScreenshot: validatedData.options?.screenshot
+      }
     })
       .catch((error: Error) => {
         console.error(`Audit failed for job ${jobId}:`, error);
