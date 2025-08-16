@@ -47,30 +47,52 @@ export class AuditService {
   private activeJobs = 0;
   private readonly maxConcurrentJobs = 1; // Limit to 1 job for nano instance
 
+  private pickExecutablePath(): string | undefined {
+    const candidates = [
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+    ].filter(Boolean) as string[];
+
+    for (const p of candidates) {
+      try { 
+        if (fs.existsSync(p)) return p; 
+      } catch {}
+    }
+    return undefined; // falls back to puppeteer default if present
+  }
+
   async getBrowser(): Promise<Browser> {
     if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
+      const executablePath = this.pickExecutablePath();
+      
       console.log({
         node: process.version,
-        executablePath: 'bundled-chromium',
+        executablePath: executablePath ?? '(not found)',
         pipeMode: true,
         timestamp: new Date().toISOString()
       });
 
       const launchOpts = {
-        headless: true,
-        pipe: true, // Use pipe instead of WebSocket for reliability
+        headless: true,   // Use boolean for compatibility
+        pipe: true,
+        executablePath,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-features=TranslateUI',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--mute-audio',
         ],
-        timeout: 30000,
-        protocolTimeout: 30000,
-        dumpio: false // Reduce noise
-        // No executablePath - use bundled Chromium
+        timeout: 90000,
+        protocolTimeout: 90000,
+        dumpio: false,
       };
 
       this.activeBrowser = await puppeteer.launch(launchOpts);
@@ -141,8 +163,8 @@ export class AuditService {
         }
         
         // Set reasonable timeouts
-        await page.setDefaultTimeout(30000);
-        await page.setDefaultNavigationTimeout(30000);
+        await page.setDefaultTimeout(60000);
+        await page.setDefaultNavigationTimeout(60000);
         
         // Run audit on the same page instance
         const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
@@ -224,16 +246,18 @@ export class AuditService {
       
       while (navRetries < maxNavRetries) {
         try {
-          response = await page.goto(url, { 
-            waitUntil: 'networkidle2',
-            timeout: 30000 
-          });
+          try {
+            response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+          } catch {
+            // fallback if networkidle2 stalls due to long-polling / analytics beacons
+            response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          }
           if (response) break;
         } catch (error) {
           navRetries++;
           console.warn(`Navigation attempt ${navRetries} failed:`, error);
           if (navRetries >= maxNavRetries) throw error;
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(r => setTimeout(r, 2000));
         }
       }
       
