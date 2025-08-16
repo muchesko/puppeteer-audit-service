@@ -60,9 +60,9 @@ export class AuditService {
 
       console.log({
         node: process.version,
-        puppeteerVersion: require('puppeteer/package.json').version,
         executablePath: config.chromeExecutablePath || 'bundled',
-        pipeMode: true
+        pipeMode: true,
+        timestamp: new Date().toISOString()
       });
 
       const launchOpts = {
