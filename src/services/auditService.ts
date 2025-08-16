@@ -1,4 +1,4 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
+import puppeteer, { type LaunchOptions, type Browser, Page } from 'puppeteer';
 import crypto from 'crypto';
 import fs from 'node:fs';
 import { config } from '../config/index.js';
@@ -63,49 +63,53 @@ export class AuditService {
         return undefined; // falls back to puppeteer default if present
     }
 
-    async getBrowser(): Promise<Browser> {
-        if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
-            const executablePath = this.pickExecutablePath();
+async getBrowser(): Promise<Browser> {
+  if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
+    const executablePath = this.pickExecutablePath();
 
-            const usePipe = false; // we're using WebSocket transport
-            console.log({
-                node: process.version,
-                executablePath: executablePath ?? '(not found)',
-                pipeMode: usePipe,
-                timestamp: new Date().toISOString()
-            });
+    const usePipe = false;
+    console.log({
+      node: process.version,
+      executablePath: executablePath ?? '(not found)',
+      pipeMode: usePipe,
+      timestamp: new Date().toISOString()
+    });
 
-            const launchOpts = {
-                headless: true,             // compatible across Puppeteer versions
-                pipe: usePipe,              // false => WebSocket transport
-                executablePath,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--disable-features=TranslateUI',
-                    '--disable-background-networking',
-                    '--disable-sync',
-                    '--metrics-recording-only',
-                    '--mute-audio',
-                    '--disable-extensions',
-                    '--disable-software-rasterizer',
-                    '--user-data-dir=/tmp/chrome-data', // ensure writable profile
-                    '--single-process',                 // reduce memory footprint
-                    '--renderer-process-limit=1'        // throttle renderer forks
-                    // do NOT add --remote-debugging-pipe or --remote-debugging-port when pipe=false
-                ],
-                timeout: 120000,
-                protocolTimeout: 120000,
-                dumpio: true,               // keep on for one deploy; then set to false
-            } as const;
+    // IMPORTANT: make this a mutable string[]
+    const args: string[] = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-features=TranslateUI',
+      '--disable-background-networking',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--disable-extensions',
+      '--disable-software-rasterizer',
+      '--user-data-dir=/tmp/chrome-data',
+      '--single-process',
+      '--renderer-process-limit=1'
+      // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
+    ];
 
-            this.activeBrowser = await puppeteer.launch(launchOpts);
-        }
-        return this.activeBrowser!;
-    }
+    // Also: DO NOT use `as const` on launchOpts
+    const launchOpts: LaunchOptions = {
+      headless: true,
+      pipe: usePipe,         // false => WebSocket transport
+      executablePath,
+      args,
+      timeout: 120000,
+      protocolTimeout: 120000,
+      dumpio: true
+    };
+
+    this.activeBrowser = await puppeteer.launch(launchOpts);
+  }
+  return this.activeBrowser!;
+}
 
     async startAudit(request: AuditRequest): Promise<void> {
         // Check concurrency limit
