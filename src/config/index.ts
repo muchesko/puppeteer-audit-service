@@ -13,7 +13,7 @@ export const config = {
   callbackUrl: process.env.CALLBACK_URL || 'http://localhost:3000/api/audits/callback',
   
   // Chrome/Puppeteer
-  chromeExecutablePath: process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/chromium',
+  chromeExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/google-chrome',
   puppeteerSkipDownload: process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true',
   
   // Performance

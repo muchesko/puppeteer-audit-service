@@ -1,5 +1,6 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import crypto from 'crypto';
+import fs from 'node:fs';
 import { config } from '../config/index.js';
 
 export interface AuditRequest {
@@ -48,41 +49,41 @@ export class AuditService {
 
   async getBrowser(): Promise<Browser> {
     if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
-      this.activeBrowser = await puppeteer.launch({
-        headless: true,
-        executablePath: config.chromeExecutablePath,
+      const useSystemChrome = Boolean(config.chromeExecutablePath);
+
+      // Validate system Chrome path if configured
+      if (useSystemChrome) {
+        if (!fs.existsSync(config.chromeExecutablePath)) {
+          throw new Error(`Chrome not found at ${config.chromeExecutablePath}`);
+        }
+      }
+
+      console.log({
+        node: process.version,
+        puppeteerVersion: require('puppeteer/package.json').version,
+        executablePath: config.chromeExecutablePath || 'bundled',
+        pipeMode: true
+      });
+
+      const launchOpts = {
+        headless: true, // Use boolean instead of 'new'
+        pipe: true, // Use pipe instead of WebSocket for reliability
         args: [
-          // Essential flags only - minimal and stable
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--disable-gpu',
           '--no-first-run',
           '--no-zygote',
-          // Removed --single-process (crashes on Linux)
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows',
-          '--disable-renderer-backgrounding',
-          '--disable-extensions',
-          '--disable-default-apps',
-          '--disable-sync',
-          '--disable-translate',
-          '--hide-scrollbars',
-          '--mute-audio',
-          '--disable-ipc-flooding-protection'
-          // Removed all the dangerous --disable-javascript, --disable-images etc.
-          // Removed duplicate and invalid flags
-          // Removed Node.js flags that don't belong here
+          '--disable-gpu'
+          // Removed all the problematic flags
         ],
         timeout: 30000,
         protocolTimeout: 30000,
-        handleSIGINT: false,
-        handleSIGTERM: false,
-        handleSIGHUP: false,
-        dumpio: false,
-        pipe: false // Use WebSocket, more reliable for page operations
-        // Removed slowMo - unnecessary in production
-      });
+        dumpio: true, // Enable verbose logging
+        ...(useSystemChrome && { executablePath: config.chromeExecutablePath })
+      };
+
+      this.activeBrowser = await puppeteer.launch(launchOpts);
     }
     return this.activeBrowser;
   }
@@ -134,11 +135,11 @@ export class AuditService {
       const page = await browser!.newPage();
       
       try {
-        // Configure page with error handling
-        await page.setUserAgent(
-          request.options?.customUserAgent || 
-          config.lighthouse.settings.emulatedUserAgent
-        );
+        // Configure page once with error handling
+        const userAgent = request.options?.customUserAgent || 
+          config.lighthouse.settings.emulatedUserAgent;
+        
+        await page.setUserAgent(userAgent);
         
         if (request.options?.mobile) {
           await page.setViewport({ width: 375, height: 667 });
@@ -154,7 +155,7 @@ export class AuditService {
         await page.setDefaultNavigationTimeout(30000);
         
         // Run audit on the same page instance
-        const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl, request.options?.mobile);
+        const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
         
         // Take screenshot if requested (on same page)
         let screenshot: string | undefined;
@@ -223,24 +224,9 @@ export class AuditService {
     }
   }
 
-  private async runLighthouseAudit(page: Page, url: string, mobile = false) {
-    // Run audit directly on the provided page instance
+  private async runLighthouseAudit(page: Page, url: string) {
+    // Run audit directly on the provided page instance (no re-configuration)
     try {
-      // Configure page for mobile/desktop
-      if (mobile) {
-        await page.setViewport({ width: 375, height: 667 });
-        await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15');
-      } else {
-        await page.setViewport({ 
-          width: config.lighthouse.settings.screenEmulation.width, 
-          height: config.lighthouse.settings.screenEmulation.height 
-        });
-      }
-      
-      // Set timeouts for stability
-      await page.setDefaultTimeout(30000);
-      await page.setDefaultNavigationTimeout(30000);
-      
       // Navigate to page with retries
       let response;
       let navRetries = 0;
