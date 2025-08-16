@@ -75,7 +75,7 @@ export class AuditService {
       });
 
       const launchOpts = {
-        headless: 'new' as const,   // Use boolean for compatibility
+        headless: true,   // Use boolean for compatibility
         pipe: false,
         executablePath,
         args: [
