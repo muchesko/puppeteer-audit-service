@@ -5,7 +5,7 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   
   // Security - match Koyeb environment variable names
-  apiSecretKey: process.env.API_KEY || process.env.API_SECRET_KEY || 'default-secret',
+  apiSecretKey: process.env['audit-secret-key'] || process.env.API_KEY || process.env.API_SECRET_KEY || 'default-secret',
   webhookSecret: process.env.WEBHOOK_SECRET || process.env.API_SECRET_KEY || process.env.API_KEY || 'default-secret',
   apiKey: process.env.API_KEY || process.env.API_SECRET_KEY || 'default-api-key',
   
