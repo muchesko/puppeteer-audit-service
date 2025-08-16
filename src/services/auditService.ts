@@ -50,7 +50,7 @@ export class AuditService {
         headless: true,
         executablePath: config.chromeExecutablePath,
         args: [
-          // Security flags
+          // Essential security flags for containerized environments
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
@@ -59,7 +59,7 @@ export class AuditService {
           '--no-zygote',
           '--single-process',
           
-          // Network and connectivity fixes
+          // Network and connectivity fixes - Critical for Koyeb
           '--disable-web-security',
           '--disable-features=VizDisplayCompositor',
           '--disable-background-networking',
@@ -68,6 +68,13 @@ export class AuditService {
           '--disable-renderer-backgrounding',
           '--disable-ipc-flooding-protection',
           
+          // DevTools protocol stability
+          '--remote-debugging-port=9222',
+          '--disable-dev-tools',
+          '--disable-gpu-sandbox',
+          '--disable-software-rasterizer',
+          '--disable-background-mode',
+          
           // Chrome stability flags
           '--disable-extensions',
           '--disable-default-apps',
@@ -75,23 +82,42 @@ export class AuditService {
           '--no-default-browser-check',
           '--no-pings',
           '--disable-features=TranslateUI',
+          '--disable-component-update',
+          '--disable-client-side-phishing-detection',
+          '--disable-default-apps',
+          '--disable-hang-monitor',
+          '--disable-popup-blocking',
+          '--disable-prompt-on-repost',
+          '--disable-sync',
+          '--disable-translate',
+          '--metrics-recording-only',
+          '--no-first-run',
+          '--safebrowsing-disable-auto-update',
+          '--enable-automation',
+          '--password-store=basic',
+          '--use-mock-keychain',
           
-          // Memory management
+          // Memory and performance optimizations
           '--memory-pressure-off',
           '--max_old_space_size=4096',
+          '--js-flags="--max-old-space-size=4096"',
           
           // Additional fixes for containerized environments
-          '--disable-dev-tools',
-          '--disable-gpu-sandbox',
-          '--disable-software-rasterizer',
-          '--remote-debugging-port=0',
-          '--disable-background-mode'
+          '--disable-accelerated-2d-canvas',
+          '--disable-accelerated-jpeg-decoding',
+          '--disable-accelerated-mjpeg-decode',
+          '--disable-accelerated-video-decode',
+          '--disable-gpu-rasterization',
+          '--disable-gpu-memory-buffer-video-frames'
         ],
-        timeout: 30000,
-        protocolTimeout: 30000,
+        timeout: 60000, // Increased timeout for slower containers
+        protocolTimeout: 60000, // Increased protocol timeout
         handleSIGINT: false,
         handleSIGTERM: false,
-        handleSIGHUP: false
+        handleSIGHUP: false,
+        dumpio: false, // Disable dumping IO to reduce noise
+        pipe: false, // Use WebSocket instead of pipe for more reliable connection
+        slowMo: 100 // Add small delay between operations for stability
       });
     }
     return this.activeBrowser;
@@ -108,14 +134,21 @@ export class AuditService {
     try {
       console.log(`Processing audit for ${request.websiteUrl} (Job: ${request.jobId})`);
       
-      // Add retry logic for browser launch
+      // Add retry logic for browser launch with exponential backoff
       let browser: Browser;
       let retryCount = 0;
-      const maxRetries = 3;
+      const maxRetries = 5; // Increased retries
       
       while (retryCount < maxRetries) {
         try {
+          console.log(`Browser launch attempt ${retryCount + 1}/${maxRetries}`);
           browser = await this.getBrowser();
+          
+          // Test the connection by creating and closing a test page
+          const testPage = await browser.newPage();
+          await testPage.close();
+          
+          console.log(`Browser launch successful on attempt ${retryCount + 1}`);
           break;
         } catch (error) {
           retryCount++;
@@ -132,78 +165,100 @@ export class AuditService {
             try {
               await this.activeBrowser.close();
             } catch (e) {
-              // Ignore cleanup errors
+              console.log('Browser cleanup completed (errors ignored)');
             }
             this.activeBrowser = null;
           }
           
-          // Wait before retry
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          // Exponential backoff: wait longer between retries
+          const backoffTime = Math.min(10000, 1000 * Math.pow(2, retryCount));
+          console.log(`Waiting ${backoffTime}ms before retry ${retryCount + 1}`);
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
         }
       }
       
       const page = await browser!.newPage();
       
-      // Configure page
-      await page.setUserAgent(
-        request.options?.customUserAgent || 
-        config.lighthouse.settings.emulatedUserAgent
-      );
-      
-      if (request.options?.mobile) {
-        await page.setViewport({ width: 375, height: 667 });
-      } else {
-        await page.setViewport({ 
-          width: config.lighthouse.settings.screenEmulation.width, 
-          height: config.lighthouse.settings.screenEmulation.height 
-        });
-      }
-      
-      // Run Lighthouse audit
-      const lighthouseResult = await this.runLighthouseAudit(request.websiteUrl, request.options?.mobile);
-      
-      // Take screenshot if requested
-      let screenshot: string | undefined;
-      if (request.options?.includeScreenshot) {
-        try {
-          await page.goto(request.websiteUrl, { waitUntil: 'networkidle2' });
-          const screenshotBuffer = await page.screenshot({ 
-            type: 'png',
-            fullPage: false
+      try {
+        // Configure page with error handling
+        await page.setUserAgent(
+          request.options?.customUserAgent || 
+          config.lighthouse.settings.emulatedUserAgent
+        );
+        
+        if (request.options?.mobile) {
+          await page.setViewport({ width: 375, height: 667 });
+        } else {
+          await page.setViewport({ 
+            width: config.lighthouse.settings.screenEmulation.width, 
+            height: config.lighthouse.settings.screenEmulation.height 
           });
-          screenshot = Buffer.from(screenshotBuffer).toString('base64');
+        }
+        
+        // Set additional page configurations for stability
+        await page.setDefaultTimeout(config.requestTimeout);
+        await page.setDefaultNavigationTimeout(config.requestTimeout);
+        
+        // Run Lighthouse audit with timeout protection
+        const lighthouseResult = await Promise.race([
+          this.runLighthouseAudit(request.websiteUrl, request.options?.mobile),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Lighthouse audit timeout')), config.requestTimeout)
+          )
+        ]) as any;
+        
+        // Take screenshot if requested
+        let screenshot: string | undefined;
+        if (request.options?.includeScreenshot) {
+          try {
+            await page.goto(request.websiteUrl, { 
+              waitUntil: 'networkidle2',
+              timeout: 30000 
+            });
+            const screenshotBuffer = await page.screenshot({ 
+              type: 'png',
+              fullPage: false
+            });
+            screenshot = Buffer.from(screenshotBuffer).toString('base64');
+          } catch (error) {
+            console.warn('Screenshot failed:', error);
+          }
+        }
+        
+        // Process results
+        const auditResult: AuditResult = {
+          jobId: request.jobId,
+          status: 'COMPLETED',
+          results: {
+            performanceScore: lighthouseResult.performance,
+            seoScore: lighthouseResult.seo,
+            accessibilityScore: lighthouseResult.accessibility,
+            bestPracticesScore: lighthouseResult.bestPractices,
+            issues: lighthouseResult.issues,
+            metrics: lighthouseResult.metrics,
+            pagesCrawled: 1,
+            screenshot
+          }
+        };
+        
+        this.jobStatuses.set(request.jobId, 'COMPLETED');
+        this.jobResults.set(request.jobId, auditResult);
+        
+        console.log(`Audit completed for job ${request.jobId}:`, {
+          performance: auditResult.results?.performanceScore,
+          seo: auditResult.results?.seoScore,
+          accessibility: auditResult.results?.accessibilityScore,
+          bestPractices: auditResult.results?.bestPracticesScore
+        });
+        
+      } finally {
+        // Always close the page
+        try {
+          await page.close();
         } catch (error) {
-          console.warn('Screenshot failed:', error);
+          console.warn('Page close error (ignored):', error);
         }
       }
-      
-      await page.close();
-      
-      // Process results
-  const auditResult: AuditResult = {
-        jobId: request.jobId,
-        status: 'COMPLETED',
-        results: {
-          performanceScore: lighthouseResult.performance,
-          seoScore: lighthouseResult.seo,
-          accessibilityScore: lighthouseResult.accessibility,
-          bestPracticesScore: lighthouseResult.bestPractices,
-          issues: lighthouseResult.issues,
-          metrics: lighthouseResult.metrics,
-          pagesCrawled: 1,
-          screenshot
-        }
-      };
-      
-      this.jobStatuses.set(request.jobId, 'COMPLETED');
-  this.jobResults.set(request.jobId, auditResult);
-      
-      console.log(`Audit completed for job ${request.jobId}:`, {
-        performance: auditResult.results?.performanceScore,
-        seo: auditResult.results?.seoScore,
-        accessibility: auditResult.results?.accessibilityScore,
-        bestPractices: auditResult.results?.bestPracticesScore
-      });
       
       // Note: Callback functionality disabled for now
       // await this.sendCallback(auditResult);
@@ -211,14 +266,14 @@ export class AuditService {
     } catch (error) {
       console.error(`Audit failed for job ${request.jobId}:`, error);
       
-  const auditResult: AuditResult = {
+      const auditResult: AuditResult = {
         jobId: request.jobId,
         status: 'FAILED',
         error: error instanceof Error ? error.message : 'Unknown error'
       };
       
       this.jobStatuses.set(request.jobId, 'FAILED');
-  this.jobResults.set(request.jobId, auditResult);
+      this.jobResults.set(request.jobId, auditResult);
       
       console.log(`Audit failed for job ${request.jobId}:`, error instanceof Error ? error.message : 'Unknown error');
       
@@ -235,92 +290,117 @@ export class AuditService {
       const browser = await this.getBrowser();
       const page = await browser.newPage();
       
-      // Configure page for mobile/desktop
-      if (mobile) {
-        await page.setViewport({ width: 375, height: 667 });
-        await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15');
-      } else {
-        await page.setViewport({ 
-          width: config.lighthouse.settings.screenEmulation.width, 
-          height: config.lighthouse.settings.screenEmulation.height 
+      try {
+        // Configure page for mobile/desktop
+        if (mobile) {
+          await page.setViewport({ width: 375, height: 667 });
+          await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15');
+        } else {
+          await page.setViewport({ 
+            width: config.lighthouse.settings.screenEmulation.width, 
+            height: config.lighthouse.settings.screenEmulation.height 
+          });
+        }
+        
+        // Set timeouts for stability
+        await page.setDefaultTimeout(30000);
+        await page.setDefaultNavigationTimeout(30000);
+        
+        // Navigate to page with retries
+        let response;
+        let navRetries = 0;
+        const maxNavRetries = 3;
+        
+        while (navRetries < maxNavRetries) {
+          try {
+            response = await page.goto(url, { 
+              waitUntil: 'networkidle2',
+              timeout: config.requestTimeout 
+            });
+            if (response) break;
+          } catch (error) {
+            navRetries++;
+            console.warn(`Navigation attempt ${navRetries} failed:`, error);
+            if (navRetries >= maxNavRetries) throw error;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+        
+        if (!response) {
+          throw new Error('Failed to load page after retries');
+        }
+        
+        // Basic performance metrics
+        const metrics = await page.metrics();
+        const performanceEntries = await page.evaluate(() => {
+          return JSON.stringify(performance.getEntriesByType('navigation'));
         });
-      }
-      
-      // Navigate to page
-      const response = await page.goto(url, { 
-        waitUntil: 'networkidle2',
-        timeout: config.requestTimeout 
-      });
-      
-      if (!response) {
-        throw new Error('Failed to load page');
-      }
-      
-      // Basic performance metrics
-      const metrics = await page.metrics();
-      const performanceEntries = await page.evaluate(() => {
-        return JSON.stringify(performance.getEntriesByType('navigation'));
-      });
-      
-      const navigationEntries = JSON.parse(performanceEntries);
-      const loadTime = navigationEntries[0]?.loadEventEnd || 0;
-      
-      // Simple scoring based on load time and basic checks
-      const performanceScore = Math.max(0, Math.min(100, 100 - (loadTime / 100)));
-      
-      // Basic SEO checks
-      const seoChecks = await page.evaluate(() => {
-        const title = document.title;
-        const metaDescription = document.querySelector('meta[name="description"]');
-        const h1s = document.querySelectorAll('h1');
         
-        let score = 0;
-        if (title && title.length > 0 && title.length < 60) score += 25;
-        if (metaDescription && metaDescription.getAttribute('content')) score += 25;
-        if (h1s.length === 1) score += 25;
-        if (document.querySelector('meta[name="viewport"]')) score += 25;
+        const navigationEntries = JSON.parse(performanceEntries);
+        const loadTime = navigationEntries[0]?.loadEventEnd || 0;
         
-        return score;
-      });
-      
-      // Basic accessibility checks
-      const accessibilityScore = await page.evaluate(() => {
-        const images = document.querySelectorAll('img');
-        const buttons = document.querySelectorAll('button');
-        const links = document.querySelectorAll('a');
+        // Simple scoring based on load time and basic checks
+        const performanceScore = Math.max(0, Math.min(100, 100 - (loadTime / 100)));
         
-        let score = 100;
+        // Basic SEO checks
+        const seoChecks = await page.evaluate(() => {
+          const title = document.title;
+          const metaDescription = document.querySelector('meta[name="description"]');
+          const h1s = document.querySelectorAll('h1');
+          
+          let score = 0;
+          if (title && title.length > 0 && title.length < 60) score += 25;
+          if (metaDescription && metaDescription.getAttribute('content')) score += 25;
+          if (h1s.length === 1) score += 25;
+          if (document.querySelector('meta[name="viewport"]')) score += 25;
+          
+          return score;
+        });
         
-        // Check for alt text on images
-        for (const img of images) {
-          if (!img.getAttribute('alt')) {
-            score -= 10;
+        // Basic accessibility checks
+        const accessibilityScore = await page.evaluate(() => {
+          const images = document.querySelectorAll('img');
+          const buttons = document.querySelectorAll('button');
+          const links = document.querySelectorAll('a');
+          
+          let score = 100;
+          
+          // Check for alt text on images
+          for (const img of images) {
+            if (!img.getAttribute('alt')) {
+              score -= 10;
+            }
           }
-        }
-        
-        // Check for proper button text
-        for (const button of buttons) {
-          if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
-            score -= 5;
+          
+          // Check for proper button text
+          for (const button of buttons) {
+            if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
+              score -= 5;
+            }
           }
-        }
+          
+          return Math.max(0, score);
+        });
         
-        return Math.max(0, score);
-      });
-      
-      await page.close();
-      
-      return {
-        performance: Math.round(performanceScore),
-        seo: seoChecks,
-        accessibility: Math.round(accessibilityScore),
-        bestPractices: 75, // Default score
-        metrics: {
-          loadTime: loadTime,
-          cumulativeLayoutShift: 0 // Simplified
-        },
-        issues: [] // Simplified - no detailed issues for now
-      };
+        return {
+          performance: Math.round(performanceScore),
+          seo: seoChecks,
+          accessibility: Math.round(accessibilityScore),
+          bestPractices: 75, // Default score
+          metrics: {
+            loadTime: loadTime,
+            cumulativeLayoutShift: 0 // Simplified
+          },
+          issues: [] // Simplified - no detailed issues for now
+        };
+        
+      } finally {
+        try {
+          await page.close();
+        } catch (error) {
+          console.warn('Page close error in runLighthouseAudit (ignored):', error);
+        }
+      }
       
     } catch (error) {
       console.error('Simplified audit failed:', error);
