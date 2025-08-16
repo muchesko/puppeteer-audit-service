@@ -65,6 +65,16 @@ export class AuditService {
 
 async getBrowser(): Promise<Browser> {
   if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
+    // Clean up any existing browser first
+    if (this.activeBrowser) {
+      try {
+        await this.activeBrowser.close();
+      } catch (error) {
+        console.warn('Failed to close existing browser:', error);
+      }
+      this.activeBrowser = null;
+    }
+
     const executablePath = this.pickExecutablePath();
 
     const usePipe = false;
@@ -82,17 +92,30 @@ async getBrowser(): Promise<Browser> {
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-zygote',
-      '--disable-features=TranslateUI',
+      '--single-process', // Enable single-process mode for nano instances
+      '--disable-features=TranslateUI,VizDisplayCompositor',
       '--disable-background-networking',
       '--disable-sync',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-ipc-flooding-protection',
       '--metrics-recording-only',
       '--mute-audio',
       '--disable-extensions',
       '--disable-software-rasterizer',
+      '--disable-canvas-aa',
+      '--disable-2d-canvas-clip-aa',
+      '--disable-gl-drawing-for-tests',
+      '--disable-accelerated-2d-canvas',
+      '--disable-accelerated-video-decode',
       '--user-data-dir=/tmp/chrome-data',
-      //'--single-process',
+      '--max_old_space_size=256', // Limit V8 heap size
+      '--memory-pressure-off',
       '--renderer-process-limit=1',
       '--no-proxy-server',
+      '--disable-web-security', // For faster loading
+      '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess',
       // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
     ];
 
@@ -102,9 +125,9 @@ async getBrowser(): Promise<Browser> {
       pipe: usePipe,         // false => WebSocket transport
       executablePath,
       args,
-      timeout: 120000,
-      protocolTimeout: 120000,
-      dumpio: true
+      timeout: 60000,        // Reduced from 120s
+      protocolTimeout: 60000, // Reduced from 120s
+      dumpio: false          // Disable dumpio to reduce overhead
     };
 
     this.activeBrowser = await puppeteer.launch(launchOpts);
@@ -175,8 +198,8 @@ async getBrowser(): Promise<Browser> {
                 }
 
                 // Set reasonable timeouts
-                await page.setDefaultTimeout(60000);
-                await page.setDefaultNavigationTimeout(60000);
+                await page.setDefaultTimeout(30000);      // Reduced from 60s
+                await page.setDefaultNavigationTimeout(30000); // Reduced from 60s
 
                 // Run audit on the same page instance
                 const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
@@ -228,6 +251,17 @@ async getBrowser(): Promise<Browser> {
                 } catch (error) {
                     console.warn('Page close error (ignored):', error);
                 }
+                
+                // Close browser after each job to prevent memory leaks
+                try {
+                    if (this.activeBrowser) {
+                        await this.activeBrowser.close();
+                        this.activeBrowser = null;
+                        console.log('Browser closed after job completion');
+                    }
+                } catch (error) {
+                    console.warn('Browser close error (ignored):', error);
+                }
             }
 
         } catch (error) {
@@ -259,17 +293,17 @@ async getBrowser(): Promise<Browser> {
             while (navRetries < maxNavRetries) {
                 try {
                     try {
-                        response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+                        response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
                     } catch {
-                        // fallback if networkidle2 stalls due to long-polling / analytics beacons
-                        response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                        // Even simpler fallback - just load the page
+                        response = await page.goto(url, { waitUntil: 'load', timeout: 15000 });
                     }
                     if (response) break;
                 } catch (error) {
                     navRetries++;
                     console.warn(`Navigation attempt ${navRetries} failed:`, error);
                     if (navRetries >= maxNavRetries) throw error;
-                    await new Promise(r => setTimeout(r, 2000));
+                    await new Promise(r => setTimeout(r, 1000)); // Reduced wait time
                 }
             }
 
