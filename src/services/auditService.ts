@@ -75,8 +75,8 @@ export class AuditService {
       });
 
       const launchOpts = {
-        headless: true,   // Use boolean for compatibility
-        pipe: true,
+        headless: 'new' as const,   // Use boolean for compatibility
+        pipe: false,
         executablePath,
         args: [
           '--no-sandbox',
@@ -92,7 +92,7 @@ export class AuditService {
         ],
         timeout: 90000,
         protocolTimeout: 90000,
-        dumpio: false,
+        dumpio: true,
       };
 
       this.activeBrowser = await puppeteer.launch(launchOpts);
