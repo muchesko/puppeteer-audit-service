@@ -63,70 +63,83 @@ export class AuditService {
         return undefined; // falls back to puppeteer default if present
     }
 
-async getBrowser(): Promise<Browser> {
-  if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
-    // Clean up any existing browser first
-    if (this.activeBrowser) {
-      try {
-        await this.activeBrowser.close();
-      } catch (error) {
-        console.warn('Failed to close existing browser:', error);
-      }
-      this.activeBrowser = null;
+    async getBrowser(): Promise<Browser> {
+        if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
+            // Clean up any existing browser first
+            if (this.activeBrowser) {
+                try {
+                    await this.activeBrowser.close();
+                } catch (error) {
+                    console.warn('Failed to close existing browser:', error);
+                }
+                this.activeBrowser = null;
+            }
+
+            const executablePath = this.pickExecutablePath();
+
+            const usePipe = false;
+            console.log({
+                node: process.version,
+                executablePath: executablePath ?? '(not found)',
+                pipeMode: usePipe,
+                timestamp: new Date().toISOString()
+            });
+
+            // IMPORTANT: make this a mutable string[]
+            const args: string[] = [
+
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu',
+                '--hide-scrollbars',
+                '--mute-audio',
+                '--disable-extensions',
+                '--user-data-dir=/tmp/chrome-data',
+
+                /*'--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-background-networking',
+                '--disable-sync',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-ipc-flooding-protection',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--disable-extensions',
+                '--disable-software-rasterizer',
+                '--disable-canvas-aa',
+                '--disable-2d-canvas-clip-aa',
+                '--disable-gl-drawing-for-tests',
+                '--disable-accelerated-2d-canvas',
+                '--disable-accelerated-video-decode',
+                '--user-data-dir=/tmp/chrome-data',
+                '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess,TranslateUI',
+                // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
+                */
+            ];
+
+            // Also: DO NOT use `as const` on launchOpts
+            const launchOpts: LaunchOptions = {
+                headless: true,
+                pipe: usePipe,         // false => WebSocket transport
+                executablePath,
+                args,
+                timeout: 120_000,        // Increased for nano instances
+                protocolTimeout: 180_000, // Significantly increased for nano instances
+                dumpio: true          // Disable dumpio to reduce overhead
+            };
+
+            this.activeBrowser = await puppeteer.launch(launchOpts);
+        }
+        return this.activeBrowser!;
     }
-
-    const executablePath = this.pickExecutablePath();
-
-    const usePipe = false;
-    console.log({
-      node: process.version,
-      executablePath: executablePath ?? '(not found)',
-      pipeMode: usePipe,
-      timestamp: new Date().toISOString()
-    });
-
-    // IMPORTANT: make this a mutable string[]
-    const args: string[] = [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-background-networking',
-      '--disable-sync',
-      '--disable-background-timer-throttling',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-ipc-flooding-protection',
-      '--metrics-recording-only',
-      '--mute-audio',
-      '--disable-extensions',
-      '--disable-software-rasterizer',
-      '--disable-canvas-aa',
-      '--disable-2d-canvas-clip-aa',
-      '--disable-gl-drawing-for-tests',
-      '--disable-accelerated-2d-canvas',
-      '--disable-accelerated-video-decode',
-      '--user-data-dir=/tmp/chrome-data',
-      '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess,TranslateUI',
-      // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
-    ];
-
-    // Also: DO NOT use `as const` on launchOpts
-    const launchOpts: LaunchOptions = {
-      headless: true,
-      pipe: usePipe,         // false => WebSocket transport
-      executablePath,
-      args,
-      timeout: 120_000,        // Increased for nano instances
-      protocolTimeout: 180_000, // Significantly increased for nano instances
-      dumpio: true          // Disable dumpio to reduce overhead
-    };
-
-    this.activeBrowser = await puppeteer.launch(launchOpts);
-  }
-  return this.activeBrowser!;
-}
 
     async startAudit(request: AuditRequest): Promise<void> {
         // Check concurrency limit
@@ -244,7 +257,7 @@ async getBrowser(): Promise<Browser> {
                 } catch (error) {
                     console.warn('Page close error (ignored):', error);
                 }
-                
+
                 // Close browser after each job to prevent memory leaks
                 try {
                     if (this.activeBrowser) {
