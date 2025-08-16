@@ -1,12 +1,11 @@
 # ---------- base ----------
 FROM node:20-bookworm-slim AS base
 WORKDIR /app
-ENV NODE_ENV=production
 
 # ---------- deps (with dev deps for build) ----------
 FROM base AS deps
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 # ---------- build ----------
 FROM deps AS build
