@@ -43,6 +43,8 @@ export class AuditService {
   private activeBrowser: Browser | null = null;
   private jobStatuses = new Map<string, string>();
   private jobResults = new Map<string, AuditResult>();
+  private activeJobs = 0;
+  private readonly maxConcurrentJobs = 1; // Limit to 1 job for nano instance
 
   async getBrowser(): Promise<Browser> {
     if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
@@ -50,104 +52,85 @@ export class AuditService {
         headless: true,
         executablePath: config.chromeExecutablePath,
         args: [
-          // Essential security flags for containerized environments
+          // Essential flags only - minimal and stable
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--no-first-run',
           '--no-zygote',
-          '--single-process',
-          
-          // Minimal set of flags for stability in nano instances
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
-          '--disable-extensions',
-          '--disable-default-apps',
-          '--disable-sync',
-          '--disable-background-networking',
+          // Removed --single-process (crashes on Linux)
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
           '--disable-renderer-backgrounding',
-          '--memory-pressure-off',
-          '--disable-ipc-flooding-protection',
-          '--disable-hang-monitor',
-          '--disable-prompt-on-repost',
-          '--disable-component-update',
-          '--disable-domain-reliability',
-          '--disable-features=AudioServiceOutOfProcess',
-          '--disable-features=TranslateUI',
-          '--enable-automation',
+          '--disable-extensions',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-translate',
           '--hide-scrollbars',
-          '--mute-audio'
+          '--mute-audio',
+          '--disable-ipc-flooding-protection'
+          // Removed all the dangerous --disable-javascript, --disable-images etc.
+          // Removed duplicate and invalid flags
+          // Removed Node.js flags that don't belong here
         ],
-        timeout: 30000, // Reduced timeout for faster feedback
+        timeout: 30000,
         protocolTimeout: 30000,
         handleSIGINT: false,
         handleSIGTERM: false,
         handleSIGHUP: false,
         dumpio: false,
-        pipe: false, // Back to WebSocket - pipe seems to have issues in this environment
-        slowMo: 50 // Reduced from 100ms to be less aggressive
+        pipe: false // Use WebSocket, more reliable for page operations
+        // Removed slowMo - unnecessary in production
       });
     }
     return this.activeBrowser;
   }
 
   async startAudit(request: AuditRequest): Promise<void> {
+    // Check concurrency limit
+    if (this.activeJobs >= this.maxConcurrentJobs) {
+      throw new Error('Maximum concurrent jobs reached');
+    }
+    
     // Start processing the audit asynchronously
     this.processAudit(request);
   }
 
   async processAudit(request: AuditRequest): Promise<void> {
+    this.activeJobs++;
     this.jobStatuses.set(request.jobId, 'PROCESSING');
     
     try {
       console.log(`Processing audit for ${request.websiteUrl} (Job: ${request.jobId})`);
       
-      // Add retry logic for browser launch with exponential backoff
+      // Single retry attempt only to avoid resource exhaustion
       let browser: Browser;
       let retryCount = 0;
-      const maxRetries = 5; // Increased retries
+      const maxRetries = 2; // Reduced retries
       
       while (retryCount < maxRetries) {
         try {
           console.log(`Browser launch attempt ${retryCount + 1}/${maxRetries}`);
           browser = await this.getBrowser();
-          
-          // Test the connection by creating and closing a test page
-          const testPage = await browser.newPage();
-          await testPage.close();
-          
           console.log(`Browser launch successful on attempt ${retryCount + 1}`);
           break;
         } catch (error) {
           retryCount++;
           console.error(`Browser launch attempt ${retryCount} failed:`, error);
-          console.error('Chrome executable path:', config.chromeExecutablePath);
-          console.error('Error details:', error instanceof Error ? error.stack : error);
           
           if (retryCount >= maxRetries) {
             throw new Error(`Failed to launch browser after ${maxRetries} attempts`);
           }
           
-          // Clean up any existing browser
-          if (this.activeBrowser) {
-            try {
-              await this.activeBrowser.close();
-            } catch (e) {
-              console.log('Browser cleanup completed (errors ignored)');
-            }
-            this.activeBrowser = null;
-          }
-          
-          // Exponential backoff: wait longer between retries
-          const backoffTime = Math.min(10000, 1000 * Math.pow(2, retryCount));
+          // Don't close the shared browser - just wait and retry
+          const backoffTime = 2000 * retryCount;
           console.log(`Waiting ${backoffTime}ms before retry ${retryCount + 1}`);
           await new Promise(resolve => setTimeout(resolve, backoffTime));
         }
       }
       
+      // Use single page for entire audit process
       const page = await browser!.newPage();
       
       try {
@@ -166,26 +149,17 @@ export class AuditService {
           });
         }
         
-        // Set additional page configurations for stability
-        await page.setDefaultTimeout(config.requestTimeout);
-        await page.setDefaultNavigationTimeout(config.requestTimeout);
+        // Set reasonable timeouts
+        await page.setDefaultTimeout(30000);
+        await page.setDefaultNavigationTimeout(30000);
         
-        // Run Lighthouse audit with timeout protection
-        const lighthouseResult = await Promise.race([
-          this.runLighthouseAudit(request.websiteUrl, request.options?.mobile),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Lighthouse audit timeout')), config.requestTimeout)
-          )
-        ]) as any;
+        // Run audit on the same page instance
+        const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl, request.options?.mobile);
         
-        // Take screenshot if requested
+        // Take screenshot if requested (on same page)
         let screenshot: string | undefined;
         if (request.options?.includeScreenshot) {
           try {
-            await page.goto(request.websiteUrl, { 
-              waitUntil: 'networkidle2',
-              timeout: 30000 
-            });
             const screenshotBuffer = await page.screenshot({ 
               type: 'png',
               fullPage: false
@@ -231,9 +205,6 @@ export class AuditService {
         }
       }
       
-      // Note: Callback functionality disabled for now
-      // await this.sendCallback(auditResult);
-      
     } catch (error) {
       console.error(`Audit failed for job ${request.jobId}:`, error);
       
@@ -247,134 +218,118 @@ export class AuditService {
       this.jobResults.set(request.jobId, auditResult);
       
       console.log(`Audit failed for job ${request.jobId}:`, error instanceof Error ? error.message : 'Unknown error');
-      
-      // Note: Callback functionality disabled for now
-      // await this.sendCallback(auditResult);
+    } finally {
+      this.activeJobs--;
     }
   }
 
-  private async runLighthouseAudit(url: string, mobile = false) {
-    // Simplified audit using just Puppeteer instead of chrome-launcher
-    // This avoids the complex Chrome launcher that was causing WebSocket issues
-    
+  private async runLighthouseAudit(page: Page, url: string, mobile = false) {
+    // Run audit directly on the provided page instance
     try {
-      const browser = await this.getBrowser();
-      const page = await browser.newPage();
+      // Configure page for mobile/desktop
+      if (mobile) {
+        await page.setViewport({ width: 375, height: 667 });
+        await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15');
+      } else {
+        await page.setViewport({ 
+          width: config.lighthouse.settings.screenEmulation.width, 
+          height: config.lighthouse.settings.screenEmulation.height 
+        });
+      }
       
-      try {
-        // Configure page for mobile/desktop
-        if (mobile) {
-          await page.setViewport({ width: 375, height: 667 });
-          await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15');
-        } else {
-          await page.setViewport({ 
-            width: config.lighthouse.settings.screenEmulation.width, 
-            height: config.lighthouse.settings.screenEmulation.height 
-          });
-        }
-        
-        // Set timeouts for stability
-        await page.setDefaultTimeout(30000);
-        await page.setDefaultNavigationTimeout(30000);
-        
-        // Navigate to page with retries
-        let response;
-        let navRetries = 0;
-        const maxNavRetries = 3;
-        
-        while (navRetries < maxNavRetries) {
-          try {
-            response = await page.goto(url, { 
-              waitUntil: 'networkidle2',
-              timeout: config.requestTimeout 
-            });
-            if (response) break;
-          } catch (error) {
-            navRetries++;
-            console.warn(`Navigation attempt ${navRetries} failed:`, error);
-            if (navRetries >= maxNavRetries) throw error;
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          }
-        }
-        
-        if (!response) {
-          throw new Error('Failed to load page after retries');
-        }
-        
-        // Basic performance metrics
-        const metrics = await page.metrics();
-        const performanceEntries = await page.evaluate(() => {
-          return JSON.stringify(performance.getEntriesByType('navigation'));
-        });
-        
-        const navigationEntries = JSON.parse(performanceEntries);
-        const loadTime = navigationEntries[0]?.loadEventEnd || 0;
-        
-        // Simple scoring based on load time and basic checks
-        const performanceScore = Math.max(0, Math.min(100, 100 - (loadTime / 100)));
-        
-        // Basic SEO checks
-        const seoChecks = await page.evaluate(() => {
-          const title = document.title;
-          const metaDescription = document.querySelector('meta[name="description"]');
-          const h1s = document.querySelectorAll('h1');
-          
-          let score = 0;
-          if (title && title.length > 0 && title.length < 60) score += 25;
-          if (metaDescription && metaDescription.getAttribute('content')) score += 25;
-          if (h1s.length === 1) score += 25;
-          if (document.querySelector('meta[name="viewport"]')) score += 25;
-          
-          return score;
-        });
-        
-        // Basic accessibility checks
-        const accessibilityScore = await page.evaluate(() => {
-          const images = document.querySelectorAll('img');
-          const buttons = document.querySelectorAll('button');
-          const links = document.querySelectorAll('a');
-          
-          let score = 100;
-          
-          // Check for alt text on images
-          for (const img of images) {
-            if (!img.getAttribute('alt')) {
-              score -= 10;
-            }
-          }
-          
-          // Check for proper button text
-          for (const button of buttons) {
-            if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
-              score -= 5;
-            }
-          }
-          
-          return Math.max(0, score);
-        });
-        
-        return {
-          performance: Math.round(performanceScore),
-          seo: seoChecks,
-          accessibility: Math.round(accessibilityScore),
-          bestPractices: 75, // Default score
-          metrics: {
-            loadTime: loadTime,
-            cumulativeLayoutShift: 0 // Simplified
-          },
-          issues: [] // Simplified - no detailed issues for now
-        };
-        
-      } finally {
+      // Set timeouts for stability
+      await page.setDefaultTimeout(30000);
+      await page.setDefaultNavigationTimeout(30000);
+      
+      // Navigate to page with retries
+      let response;
+      let navRetries = 0;
+      const maxNavRetries = 3;
+      
+      while (navRetries < maxNavRetries) {
         try {
-          await page.close();
+          response = await page.goto(url, { 
+            waitUntil: 'networkidle2',
+            timeout: 30000 
+          });
+          if (response) break;
         } catch (error) {
-          console.warn('Page close error in runLighthouseAudit (ignored):', error);
+          navRetries++;
+          console.warn(`Navigation attempt ${navRetries} failed:`, error);
+          if (navRetries >= maxNavRetries) throw error;
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
       
+      if (!response) {
+        throw new Error('Failed to load page after retries');
+      }
+      
+      // Basic performance metrics
+      const metrics = await page.metrics();
+      const performanceEntries = await page.evaluate(() => {
+        return JSON.stringify(performance.getEntriesByType('navigation'));
+      });
+      
+      const navigationEntries = JSON.parse(performanceEntries);
+      const loadTime = navigationEntries[0]?.loadEventEnd || 0;
+      
+      // Simple scoring based on load time and basic checks
+      const performanceScore = Math.max(0, Math.min(100, 100 - (loadTime / 100)));
+      
+      // Basic SEO checks
+      const seoChecks = await page.evaluate(() => {
+        const title = document.title;
+        const metaDescription = document.querySelector('meta[name="description"]');
+        const h1s = document.querySelectorAll('h1');
+        
+        let score = 0;
+        if (title && title.length > 0 && title.length < 60) score += 25;
+        if (metaDescription && metaDescription.getAttribute('content')) score += 25;
+        if (h1s.length === 1) score += 25;
+        if (document.querySelector('meta[name="viewport"]')) score += 25;
+        
+        return score;
+      });
+      
+      // Basic accessibility checks
+      const accessibilityScore = await page.evaluate(() => {
+        const images = document.querySelectorAll('img');
+        const buttons = document.querySelectorAll('button');
+        
+        let score = 100;
+        
+        // Check for alt text on images
+        for (const img of images) {
+          if (!img.getAttribute('alt')) {
+            score -= 10;
+          }
+        }
+        
+        // Check for proper button text
+        for (const button of buttons) {
+          if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
+            score -= 5;
+          }
+        }
+        
+        return Math.max(0, score);
+      });
+      
+      return {
+        performance: Math.round(performanceScore),
+        seo: seoChecks,
+        accessibility: Math.round(accessibilityScore),
+        bestPractices: 75, // Default score
+        metrics: {
+          loadTime: loadTime,
+          cumulativeLayoutShift: 0 // Simplified
+        },
+        issues: [] // Simplified - no detailed issues for now
+      };
+      
     } catch (error) {
-      console.error('Simplified audit failed:', error);
+      console.error('Audit failed:', error);
       throw error;
     }
   }
