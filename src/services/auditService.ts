@@ -133,7 +133,7 @@ export class AuditService {
                 args,
                 timeout: 120_000,        // Increased for nano instances
                 protocolTimeout: 180_000, // Significantly increased for nano instances
-                dumpio: true          // Disable dumpio to reduce overhead
+                dumpio: true          // Enable dumpio to log
             };
 
             this.activeBrowser = await puppeteer.launch(launchOpts);
