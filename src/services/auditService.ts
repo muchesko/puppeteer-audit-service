@@ -362,12 +362,13 @@ export class AuditService {
 
         // Navigate (forgiving, with global budget)
         const response = await this.progressiveGoto(page, request.websiteUrl);
-        console.log('[audit] navigation ok-ish:', response?.status());
+        console.log('[audit] navigation ok:', response?.status() || 'no response');
 
         // Try dismissing cookie walls (non-fatal)
         await this.dismissConsents(page);
 
         // Optional: after initial settle, lightly block analytics to stabilize SPAs during metric reads
+        // IMPORTANT: Set up request interception AFTER navigation to avoid conflicts
         if (request.options?.lightlyBlockTrackers) {
             const thirdPartyBlocklist = [
                 'googletagmanager.com', 'google-analytics.com', 'doubleclick.net',
@@ -376,6 +377,7 @@ export class AuditService {
             ];
 
             try {
+                console.log('[audit] setting up request interception for tracker blocking');
                 await page.setRequestInterception(true);
                 page.on('request', (req) => {
                     try {
@@ -388,6 +390,7 @@ export class AuditService {
 
                         // Only block non-critical background traffic from these vendors
                         if (is3p && (rt === 'xhr' || rt === 'fetch' || rt === 'ping' || rt === 'eventsource' || rt === 'other')) {
+                            console.log('[audit] blocking tracker request:', url);
                             return req.abort();
                         }
                     } catch {
@@ -395,7 +398,9 @@ export class AuditService {
                     }
                     try { return req.continue(); } catch { /* ignore */ }
                 });
-            } catch { /* ignore */ }
+            } catch (e) {
+                console.warn('[audit] failed to set up request interception:', (e as Error).message);
+            }
         }
 
         // Ensure DOM (guards against blank docs)
@@ -491,67 +496,103 @@ export class AuditService {
         const start = Date.now();
 
         const strategies: Array<{ name: string; opts: Parameters<Page['goto']>[1] }> = [
-            { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 30_000 } },
-            { name: 'load', opts: { waitUntil: 'load', timeout: 35_000 } },
-            { name: 'basic', opts: { timeout: 25_000 } }, // no waitUntil
+            { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 35_000 } },
+            { name: 'load', opts: { waitUntil: 'load', timeout: 40_000 } },
+            { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 30_000 } },
+            { name: 'basic', opts: { timeout: 30_000 } }, // no waitUntil
         ];
 
         let bestResp: HTTPResponse | null = null;
 
         for (let i = 0; i < strategies.length; i++) {
             const { name, opts } = strategies[i];
-            if (Date.now() - start >= totalBudgetMs) break;
+            const elapsed = Date.now() - start;
+            if (elapsed >= totalBudgetMs) {
+                console.log(`[audit] navigation budget exhausted (${elapsed}ms), stopping attempts`);
+                break;
+            }
 
             try {
-                console.log(`[audit] goto (${name})`, opts);
+                console.log(`[audit] goto attempt ${i + 1}/${strategies.length} (${name})`, opts);
                 const navPromise = page.goto(url, opts as any);
 
-                const remaining = Math.max(5_000,
-                    Math.min(totalBudgetMs - (Date.now() - start), (opts?.timeout as number) ?? 30_000)
+                const remaining = Math.max(10_000,
+                    Math.min(totalBudgetMs - elapsed, (opts?.timeout as number) ?? 30_000)
                 );
                 const watchdog = new Promise<never>((_, rej) =>
-                    setTimeout(() => rej(new Error('attempt timeout')), remaining)
+                    setTimeout(() => rej(new Error(`navigation timeout (${name})`)), remaining)
                 );
 
                 const resp = await Promise.race([navPromise, watchdog]) as HTTPResponse | null;
-                if (resp) bestResp = resp;
+                if (resp) {
+                    bestResp = resp;
+                    console.log(`[audit] goto (${name}) got response:`, resp.status(), resp.url());
+                }
 
                 // quick DOM + settle checks even on non-200s (some sites return 3xx/4xx but render)
-                try { await page.waitForSelector('body', { timeout: 8_000 }); } catch { /* ignore */ }
-
-                const settleUntil = Date.now() + 10_000;
-                while (Date.now() < settleUntil) {
-                    if (await considerReady()) return resp;
-                    await this.sleep(200);
+                try { 
+                    await page.waitForSelector('body', { timeout: 5_000 }); 
+                    console.log('[audit] body element found');
+                } catch { 
+                    console.log('[audit] no body element found yet');
                 }
-                if (await considerReady()) return resp;
 
-                // Final attempt add: hard reload to break SPA soft-nav stalls
-                if (i === strategies.length - 1 && (Date.now() - start) < totalBudgetMs - 6_000) {
-                    console.log('[audit] final attempt: hard reload');
-                    await page.reload({ waitUntil: 'domcontentloaded', timeout: 25_000 }).catch(() => undefined);
-                    if (await considerReady()) return resp;
+                // Check if page is "ready enough" 
+                const settleUntil = Date.now() + 8_000; // reduced settle time
+                let readyChecks = 0;
+                while (Date.now() < settleUntil && readyChecks < 20) {
+                    if (await considerReady()) {
+                        console.log(`[audit] page ready after ${readyChecks} checks with strategy: ${name}`);
+                        return resp;
+                    }
+                    await this.sleep(400);
+                    readyChecks++;
                 }
+                
+                // If we have a response but not fully ready, still consider it success for first attempts
+                if (resp && resp.ok() && i < strategies.length - 1) {
+                    console.log(`[audit] strategy ${name} got OK response, continuing to next strategy`);
+                    continue; // Try next strategy for better result
+                }
+
+                if (resp) {
+                    console.log(`[audit] strategy ${name} completed with response, status: ${resp.status()}`);
+                    return resp;
+                }
+
             } catch (e) {
-                console.warn(`[audit] goto (${name}) failed:`, (e as Error).message);
+                const errorMsg = (e as Error).message;
+                console.warn(`[audit] goto (${name}) failed:`, errorMsg);
+                
+                // Don't give up immediately on common navigation errors
+                if (errorMsg.includes('timeout') || errorMsg.includes('Navigation')) {
+                    continue; // Try next strategy
+                }
+                
+                // For other errors, still try next strategy
                 continue;
             }
         }
 
         // SALVAGE: if we navigated *somewhere*, continue with bestResp instead of hard fail
         if (bestResp) {
-            console.warn('[audit] navigation salvage: proceeding with best available response');
+            console.warn(`[audit] navigation salvage: proceeding with best response (${bestResp.status()})`);
             return bestResp;
         }
 
-        // Last-ditch: try opening in a new blank context without any waits, one short shot
+        // Last-ditch: try opening with absolutely minimal constraints
         try {
-            console.warn('[audit] last-ditch basic navigation');
-            const r = await page.goto(url, { timeout: 15_000 } as any).catch(() => null);
-            if (r) return r;
-        } catch { /* ignore */ }
+            console.warn('[audit] last-ditch: basic navigation with minimal constraints');
+            const r = await page.goto(url, { timeout: 20_000 } as any).catch(() => null);
+            if (r) {
+                console.log('[audit] last-ditch navigation succeeded');
+                return r;
+            }
+        } catch (e) {
+            console.warn('[audit] last-ditch navigation failed:', (e as Error).message);
+        }
 
-        throw new Error('Navigation failed after multiple strategies');
+        throw new Error('Navigation failed: all strategies exhausted');
     }
 
     // ---------- Optional: issue extraction scaffold (unused for now) ----------
