@@ -276,14 +276,14 @@ export class AuditService {
     }
 
     console.log('[audit] set timeouts');
-    page.setDefaultTimeout(90_000); // Increased for JS-heavy sites
-    page.setDefaultNavigationTimeout(90_000);
+    page.setDefaultTimeout(60_000); // Reduced back to 60s 
+    page.setDefaultNavigationTimeout(60_000);
 
     console.log('[audit] navigating', request.websiteUrl);
     const response = await this.progressiveGoto(page, request.websiteUrl);
     console.log('[audit] navigation ok:', response?.status());
 
-    // Wait for dynamic content to load after navigation
+    // Wait for dynamic content to load after navigation (shorter timeout)
     console.log('[audit] waiting for dynamic content');
     try {
       await page.waitForFunction(
@@ -296,11 +296,11 @@ export class AuditService {
           const textContent = body.innerText || body.textContent || '';
           return textContent.length > 100;
         },
-        { timeout: 20_000 }
+        { timeout: 10_000 } // Reduced from 20s to 10s
       );
       
-      // Additional wait for any async operations
-      await new Promise(resolve => setTimeout(resolve, 2_000));
+      // Shorter wait for any async operations
+      await new Promise(resolve => setTimeout(resolve, 1_000)); // Reduced from 3s to 1s
     } catch (waitError) {
       console.warn('[audit] dynamic content wait failed:', (waitError as Error).message);
       // Continue anyway - page might still be auditable
@@ -393,16 +393,15 @@ export class AuditService {
   }
 
   private async progressiveGoto(page: Page, url: string): Promise<HTTPResponse | null> {
-    // Enhanced navigation strategies for JS-heavy sites
+    // Enhanced navigation strategies for JS-heavy sites, optimized for speed
     const attempts: Array<{ name: string; opts: Parameters<Page['goto']>[1]; allowErrors?: boolean }> = [
       // Start with fastest strategy - just get to the page
-      { name: 'basic-fast', opts: { timeout: 30_000 }, allowErrors: true },
-      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 45_000 } },
-      { name: 'load', opts: { waitUntil: 'load', timeout: 60_000 } },
-      { name: 'networkidle0', opts: { waitUntil: 'networkidle0', timeout: 60_000 } },
-      { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 45_000 } },
+      { name: 'basic-fast', opts: { timeout: 20_000 }, allowErrors: true },
+      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 30_000 } },
+      { name: 'load', opts: { waitUntil: 'load', timeout: 35_000 } },
+      { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 25_000 } },
       // Final fallback - very permissive
-      { name: 'basic-fallback', opts: { timeout: 30_000 }, allowErrors: true },
+      { name: 'basic-fallback', opts: { timeout: 15_000 }, allowErrors: true },
     ];
 
     let lastResponse: HTTPResponse | null = null;
@@ -425,16 +424,16 @@ export class AuditService {
           lastResponse = res;
         }
 
-        // For JS-heavy sites, wait a bit more for JavaScript to execute
+        // For JS-heavy sites, wait a bit for JavaScript to execute but keep it short
         if (name === 'basic-fast' || name === 'domcontentloaded') {
           console.log(`[audit] waiting for JS execution after ${name}`);
           try {
             await page.waitForFunction(
               () => document.readyState === 'complete' || document.readyState === 'interactive',
-              { timeout: 10_000 }
+              { timeout: 5_000 } // Reduced timeout
             );
-            // Additional wait for dynamic content
-            await new Promise(resolve => setTimeout(resolve, 2_000));
+            // Shorter wait for dynamic content
+            await new Promise(resolve => setTimeout(resolve, 1_000));
           } catch (jsWaitError) {
             console.warn(`[audit] JS wait failed after ${name}:`, (jsWaitError as Error).message);
             // Continue anyway - the page might still be usable
