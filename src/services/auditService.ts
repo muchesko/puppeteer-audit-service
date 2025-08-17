@@ -485,20 +485,51 @@ export class AuditService {
             try {
                 return await page.evaluate(() => {
                     const rs = document.readyState;
-                    return !!document.body && (rs === 'interactive' || rs === 'complete');
+                    const hasBody = !!document.body;
+                    const hasContent = document.body?.children?.length > 0;
+                    
+                    // For React/SPA sites, also check for common frameworks
+                    const hasReact = !!(window as any).React || document.querySelector('[data-reactroot]') || document.querySelector('#root');
+                    const hasVue = !!(window as any).Vue || document.querySelector('[data-v-]');
+                    const hasAngular = !!(window as any).ng || document.querySelector('[ng-app]');
+                    
+                    // If it's a SPA, wait for framework to be ready AND content to be rendered
+                    if (hasReact || hasVue || hasAngular) {
+                        return hasBody && hasContent && (rs === 'interactive' || rs === 'complete');
+                    }
+                    
+                    // For regular sites, just check basic readiness
+                    return hasBody && (rs === 'interactive' || rs === 'complete');
                 });
             } catch {
                 return false;
             }
         };
 
-        const totalBudgetMs = 120_000;
+        // Check if site appears to be a SPA/React app
+        const detectSPA = async () => {
+            try {
+                const response = await fetch(url, { method: 'HEAD' }).catch(() => null);
+                if (!response) return false;
+                
+                // Check for common SPA indicators in headers
+                const contentType = response.headers.get('content-type') || '';
+                return contentType.includes('text/html');
+            } catch {
+                return false;
+            }
+        };
+
+        const isSPA = await detectSPA();
+        const totalBudgetMs = isSPA ? 180_000 : 120_000; // Extra time for SPAs
         const start = Date.now();
 
+        // Enhanced strategies with SPA-specific options
         const strategies: Array<{ name: string; opts: Parameters<Page['goto']>[1] }> = [
-            { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 35_000 } },
+            { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 40_000 } },
+            { name: 'networkidle0', opts: { waitUntil: 'networkidle0', timeout: 45_000 } }, // Wait for all network activity to stop
+            { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 35_000 } },
             { name: 'load', opts: { waitUntil: 'load', timeout: 40_000 } },
-            { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 30_000 } },
             { name: 'basic', opts: { timeout: 30_000 } }, // no waitUntil
         ];
 
@@ -537,16 +568,59 @@ export class AuditService {
                     console.log('[audit] no body element found yet');
                 }
 
-                // Check if page is "ready enough" 
-                const settleUntil = Date.now() + 8_000; // reduced settle time
+                // Wait for React/SPA specific elements to appear
+                if (isSPA) {
+                    try {
+                        await page.waitForFunction(() => {
+                            // Common React root selectors
+                            const reactRoot = document.querySelector('#root') || 
+                                             document.querySelector('#app') || 
+                                             document.querySelector('[data-reactroot]') ||
+                                             document.querySelector('.App');
+                            
+                            // Check if React root has content
+                            return reactRoot && reactRoot.children.length > 0;
+                        }, { timeout: 10_000 });
+                        console.log('[audit] React/SPA content detected');
+                    } catch {
+                        console.log('[audit] React/SPA content not detected, continuing...');
+                    }
+                }
+
+                // Check if page is "ready enough" with SPA-aware settling
+                const settleTimeMs = isSPA ? 15_000 : 8_000; // More time for SPAs
+                const settleUntil = Date.now() + settleTimeMs;
                 let readyChecks = 0;
-                while (Date.now() < settleUntil && readyChecks < 20) {
+                const maxChecks = isSPA ? 40 : 20; // More checks for SPAs
+                
+                while (Date.now() < settleUntil && readyChecks < maxChecks) {
                     if (await considerReady()) {
-                        console.log(`[audit] page ready after ${readyChecks} checks with strategy: ${name}`);
+                        console.log(`[audit] page ready after ${readyChecks} checks with strategy: ${name} (SPA: ${isSPA})`);
+                        
+                        // For SPAs, wait a bit more for final render
+                        if (isSPA) {
+                            console.log('[audit] SPA detected, waiting for final render...');
+                            await this.sleep(2_000);
+                        }
+                        
                         return resp;
                     }
-                    await this.sleep(400);
+                    await this.sleep(isSPA ? 500 : 400); // Slower polling for SPAs
                     readyChecks++;
+                }
+                
+                // Log what we found for debugging
+                try {
+                    const pageInfo = await page.evaluate(() => ({
+                        readyState: document.readyState,
+                        hasBody: !!document.body,
+                        bodyChildren: document.body?.children?.length || 0,
+                        hasReact: !!(window as any).React || !!document.querySelector('[data-reactroot]') || !!document.querySelector('#root'),
+                        title: document.title || 'No title'
+                    }));
+                    console.log(`[audit] page info after ${readyChecks} checks:`, pageInfo);
+                } catch (e) {
+                    console.log('[audit] could not get page info:', (e as Error).message);
                 }
                 
                 // If we have a response but not fully ready, still consider it success for first attempts
