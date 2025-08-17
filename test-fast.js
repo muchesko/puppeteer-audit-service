@@ -10,7 +10,7 @@ function generateSignature(body, secret) {
 async function testFastSite() {
     // Use a very simple, fast-loading site
     const requestBody = {
-        url: 'https://example.com', // Simple static site
+        url: 'https://github.com', // Simple static site
         options: {
             mobile: false,
             screenshot: false

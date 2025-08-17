@@ -90,6 +90,14 @@ export class AuditService {
       '--disable-renderer-backgrounding',
       '--disable-ipc-flooding-protection',
       '--metrics-recording-only',
+
+      // Better support for JS-heavy sites
+      '--disable-blink-features=AutomationControlled', // Avoid detection
+      '--disable-default-apps',
+      '--disable-sync',
+      '--disable-translate',
+      '--allow-running-insecure-content',
+      '--ignore-certificate-errors',
     ];
 
     const launchOpts: LaunchOptions = {
@@ -251,7 +259,10 @@ export class AuditService {
   }
 
   private async runSinglePageAudit(page: Page, request: AuditRequest): Promise<AuditResult> {
-    const ua = request.options?.customUserAgent || config?.lighthouse?.settings?.emulatedUserAgent || 'Mozilla/5.0';
+    // Use a more modern, less detectable user agent
+    const ua = request.options?.customUserAgent || 
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+    
     console.log('[audit] setUserAgent');
     await page.setUserAgent(ua);
 
@@ -265,12 +276,35 @@ export class AuditService {
     }
 
     console.log('[audit] set timeouts');
-    page.setDefaultTimeout(60_000);
-    page.setDefaultNavigationTimeout(60_000);
+    page.setDefaultTimeout(90_000); // Increased for JS-heavy sites
+    page.setDefaultNavigationTimeout(90_000);
 
     console.log('[audit] navigating', request.websiteUrl);
     const response = await this.progressiveGoto(page, request.websiteUrl);
     console.log('[audit] navigation ok:', response?.status());
+
+    // Wait for dynamic content to load after navigation
+    console.log('[audit] waiting for dynamic content');
+    try {
+      await page.waitForFunction(
+        () => {
+          // Check if page has substantially loaded
+          const body = document.body;
+          if (!body) return false;
+          
+          // Check if there's meaningful content
+          const textContent = body.innerText || body.textContent || '';
+          return textContent.length > 100;
+        },
+        { timeout: 20_000 }
+      );
+      
+      // Additional wait for any async operations
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+    } catch (waitError) {
+      console.warn('[audit] dynamic content wait failed:', (waitError as Error).message);
+      // Continue anyway - page might still be auditable
+    }
 
     // Collect metrics defensively
     console.log('[audit] collecting metrics');
@@ -359,27 +393,94 @@ export class AuditService {
   }
 
   private async progressiveGoto(page: Page, url: string): Promise<HTTPResponse | null> {
-    const attempts: Array<{ name: string; opts: Parameters<Page['goto']>[1] }> = [
-      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 15_000 } },
-      { name: 'load',            opts: { waitUntil: 'load',             timeout: 20_000 } },
-      { name: 'networkidle2',    opts: { waitUntil: 'networkidle2',     timeout: 25_000 } },
-      { name: 'basic',           opts: { timeout: 15_000 } },
+    // Enhanced navigation strategies for JS-heavy sites
+    const attempts: Array<{ name: string; opts: Parameters<Page['goto']>[1]; allowErrors?: boolean }> = [
+      // Start with fastest strategy - just get to the page
+      { name: 'basic-fast', opts: { timeout: 30_000 }, allowErrors: true },
+      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 45_000 } },
+      { name: 'load', opts: { waitUntil: 'load', timeout: 60_000 } },
+      { name: 'networkidle0', opts: { waitUntil: 'networkidle0', timeout: 60_000 } },
+      { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 45_000 } },
+      // Final fallback - very permissive
+      { name: 'basic-fallback', opts: { timeout: 30_000 }, allowErrors: true },
     ];
 
-    for (const { name, opts } of attempts) {
+    let lastResponse: HTTPResponse | null = null;
+    let lastError: Error | null = null;
+
+    for (const { name, opts, allowErrors } of attempts) {
       try {
-        console.log(`[audit] goto (${name})`, opts);
+        console.log(`[audit] goto (${name})`, { timeout: opts?.timeout, waitUntil: opts?.waitUntil || 'default' });
         const res = await page.goto(url, opts as any);
-        if (!res || res.status() >= 400) {
-          console.warn(`[audit] goto (${name}) status ${res?.status()}`);
+        
+        if (!res) {
+          console.warn(`[audit] goto (${name}) no response`);
+          if (!allowErrors) continue;
+        } else if (res.status() >= 400) {
+          console.warn(`[audit] goto (${name}) status ${res.status()}`);
+          if (!allowErrors && res.status() >= 500) continue; // Server errors, try next strategy
+          lastResponse = res; // Client errors (4xx) might still be usable
         } else {
-          return res;
+          console.log(`[audit] goto (${name}) success with status ${res.status()}`);
+          lastResponse = res;
         }
+
+        // For JS-heavy sites, wait a bit more for JavaScript to execute
+        if (name === 'basic-fast' || name === 'domcontentloaded') {
+          console.log(`[audit] waiting for JS execution after ${name}`);
+          try {
+            await page.waitForFunction(
+              () => document.readyState === 'complete' || document.readyState === 'interactive',
+              { timeout: 10_000 }
+            );
+            // Additional wait for dynamic content
+            await new Promise(resolve => setTimeout(resolve, 2_000));
+          } catch (jsWaitError) {
+            console.warn(`[audit] JS wait failed after ${name}:`, (jsWaitError as Error).message);
+            // Continue anyway - the page might still be usable
+          }
+        }
+
+        // If we got here, the navigation succeeded (even if with warnings)
+        return lastResponse;
+
       } catch (e) {
-        console.warn(`[audit] goto (${name}) failed:`, (e as Error).message);
+        const error = e as Error;
+        lastError = error;
+        console.warn(`[audit] goto (${name}) failed:`, error.message);
+        
+        // For certain errors, don't continue trying
+        if (error.message.includes('net::ERR_NAME_NOT_RESOLVED') || 
+            error.message.includes('net::ERR_INTERNET_DISCONNECTED')) {
+          console.error('[audit] Network connectivity issue, stopping attempts');
+          break;
+        }
+        
+        // For timeout errors, try the next strategy
+        if (error.message.includes('timeout') || error.message.includes('Navigation timeout')) {
+          continue;
+        }
       }
     }
-    throw new Error('Navigation failed after multiple strategies');
+
+    // If we have any response (even with errors), try to use it
+    if (lastResponse) {
+      console.log(`[audit] using last available response with status ${lastResponse.status()}`);
+      return lastResponse;
+    }
+
+    // As a final fallback, try to check if the page has any content
+    try {
+      const content = await page.content();
+      if (content && content.length > 100) {
+        console.log('[audit] page has content despite navigation errors, proceeding');
+        return null; // Return null but don't throw - let the audit continue
+      }
+    } catch (contentError) {
+      console.warn('[audit] failed to check page content:', (contentError as Error).message);
+    }
+
+    throw new Error(`Navigation failed after multiple strategies. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 
   // ---------- Optional: issue extraction scaffold (unused for now) ----------
