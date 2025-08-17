@@ -116,7 +116,8 @@ export class AuditService {
                 '--password-store=basic',
                 '--use-mock-keychain',
                 '--window-size=1366,900',
-                '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests'
+                '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
+                '--renderer-process-limit=1',
                 '--js-flags=--max-old-space-size=192',
                 '--disable-features=AudioServiceOutOfProcess,BackForwardCache,TranslateUI',
                 '--disable-backgrounding-occluded-windows',
