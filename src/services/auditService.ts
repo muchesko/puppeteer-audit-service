@@ -1,9 +1,4 @@
-import puppeteer, {
-    type LaunchOptions,
-    type Browser,
-    type Page,
-    type HTTPResponse
-} from 'puppeteer';
+import puppeteer, { type LaunchOptions, type Browser, Page } from 'puppeteer';
 import crypto from 'crypto';
 import fs from 'node:fs';
 import { config } from '../config/index.js';
@@ -52,16 +47,6 @@ export class AuditService {
     private activeJobs = 0;
     private readonly maxConcurrentJobs = 1; // Limit to 1 job for nano instance
 
-    // --- Blocking + stealth config ---
-    private readonly BLOCKED_RESOURCE_TYPES = new Set([
-        'image', 'media', 'font', 'stylesheet', 'websocket'
-    ]);
-    private readonly BLOCKED_URL_SUBSTRINGS = [
-        'doubleclick', 'googletagmanager', 'googletagservices', 'google-analytics',
-        'facebook.com/tr', 'hotjar', 'segment.com', 'amplitude', 'mixpanel',
-        'optimizely', 'newrelic', 'adservice', 'adsystem', 'taboola', 'outbrain'
-    ];
-
     private pickExecutablePath(): string | undefined {
         const candidates = [
             process.env.PUPPETEER_EXECUTABLE_PATH,
@@ -100,11 +85,9 @@ export class AuditService {
                 timestamp: new Date().toISOString()
             });
 
-            // Ensure user-data-dir exists
-            try { fs.mkdirSync('/tmp/chrome-data', { recursive: true }); } catch { }
-
             // IMPORTANT: make this a mutable string[]
             const args: string[] = [
+
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
@@ -115,9 +98,31 @@ export class AuditService {
                 '--mute-audio',
                 '--disable-extensions',
                 '--user-data-dir=/tmp/chrome-data',
-                '--window-size=1366,768',
-                '--force-color-profile=srgb',
-                '--allow-pre-commit-input',
+
+                /*'--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-background-networking',
+                '--disable-sync',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-ipc-flooding-protection',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--disable-extensions',
+                '--disable-software-rasterizer',
+                '--disable-canvas-aa',
+                '--disable-2d-canvas-clip-aa',
+                '--disable-gl-drawing-for-tests',
+                '--disable-accelerated-2d-canvas',
+                '--disable-accelerated-video-decode',
+                '--user-data-dir=/tmp/chrome-data',
+                '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess,TranslateUI',
+                // do NOT add --remote-debugging-port or --remote-debugging-pipe here when using WS transport
+                */
             ];
 
             // Also: DO NOT use `as const` on launchOpts
@@ -126,9 +131,9 @@ export class AuditService {
                 pipe: usePipe,         // false => WebSocket transport
                 executablePath,
                 args,
-                timeout: 120_000,          // Increased for nano instances
-                protocolTimeout: 180_000,  // Significantly increased for nano instances
-                dumpio: true               // Enable dumpio to log
+                timeout: 120_000,        // Increased for nano instances
+                protocolTimeout: 180_000, // Significantly increased for nano instances
+                dumpio: true          // Enable dumpio to log
             };
 
             this.activeBrowser = await puppeteer.launch(launchOpts);
@@ -190,17 +195,12 @@ export class AuditService {
             // Use single page for entire audit process
             const page = await browser!.newPage();
             console.log('[audit] page created');
-
             page.on('console', m => console.log('[console]', m.type(), m.text()));
             page.on('pageerror', e => console.warn('[pageerror]', e.message));
             page.on('requestfailed', r => console.warn('[requestfailed]', r.url(), r.failure()?.errorText));
 
-            // Page hardening for JS-heavy sites
-            await this.applyStealthShims(page);
-            await this.enableRequestInterception(page);
-
             try {
-                const jobDeadlineMs = 180_000; // 3 minute job watchdog for heavy sites
+                const jobDeadlineMs = 120_000; // 2 minute job watchdog
                 const watchdog = new Promise<never>((_, rej) =>
                     setTimeout(() => rej(new Error('Job watchdog timeout')), jobDeadlineMs)
                 );
@@ -213,13 +213,15 @@ export class AuditService {
 
                         console.log('[audit] setUserAgent');
                         await page.setUserAgent(userAgent);
-                        await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
 
                         console.log('[audit] setViewport');
                         if (request.options?.mobile) {
-                            await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+                            await page.setViewport({ width: 375, height: 667 });
                         } else {
-                            await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
+                            await page.setViewport({
+                                width: config.lighthouse.settings.screenEmulation.width,
+                                height: config.lighthouse.settings.screenEmulation.height
+                            });
                         }
 
                         console.log('[audit] set timeouts');
@@ -234,7 +236,6 @@ export class AuditService {
                         let screenshot: string | undefined;
                         if (request.options?.includeScreenshot) {
                             try {
-                                await this.waitForNetworkQuiet(page, 1000, 2, 8000).catch(() => { });
                                 const buf = await page.screenshot({ type: 'png', fullPage: false });
                                 screenshot = Buffer.from(buf).toString('base64');
                             } catch (error) {
@@ -300,8 +301,8 @@ export class AuditService {
                 jobId: request.jobId,
                 status: 'FAILED',
                 results: undefined,
-                error: error instanceof Error ?
-                    `${error.name}: ${error.message}` :
+                error: error instanceof Error ? 
+                    `${error.name}: ${error.message}` : 
                     'Unknown audit error'
             };
             this.jobResults.set(request.jobId, errorResult);
@@ -312,278 +313,138 @@ export class AuditService {
         }
     }
 
-    // --- Robust navigation + analysis with soft idle and consent handling ---
     private async runLighthouseAudit(page: Page, url: string) {
+        // Run audit directly on the provided page instance (no re-configuration)
         try {
             console.log('[audit] starting progressive navigation to', url);
 
-            const navStrategies: Array<{ name: string; waitUntil?: 'domcontentloaded' | 'load' | 'networkidle2'; navTimeout: number; quietTimeout: number; }> = [
-                { name: 'domcontentloaded+quiet', waitUntil: 'domcontentloaded', navTimeout: 25_000, quietTimeout: 15_000 },
-                { name: 'load+quiet', waitUntil: 'load', navTimeout: 35_000, quietTimeout: 15_000 },
-                { name: 'networkidle2+quiet', waitUntil: 'networkidle2', navTimeout: 45_000, quietTimeout: 10_000 },
-                { name: 'basic+quiet', waitUntil: undefined, navTimeout: 20_000, quietTimeout: 12_000 },
+            // Progressive navigation with fallback strategies
+            let response;
+            let navSuccess = false;
+            const strategies = [
+                { waitUntil: 'domcontentloaded', timeout: 30_000, name: 'DOM ready' },
+                { waitUntil: 'load', timeout: 45_000, name: 'full load' },
+                { waitUntil: 'networkidle2', timeout: 60_000, name: 'network idle' },
+                { waitUntil: undefined, timeout: 20_000, name: 'basic navigation' }
             ];
 
-            try { await page.setBypassCSP(true); } catch { }
-
-            let response: HTTPResponse | null = null;
-            let navOk = false;
-            let lastError: unknown = null;
-
-            for (const strat of navStrategies) {
+            for (const strategy of strategies) {
                 try {
-                    console.log(`[audit] navigating with strategy "${strat.name}"`);
-                    const opts: any = { timeout: strat.navTimeout };
-                    if (strat.waitUntil) opts.waitUntil = strat.waitUntil;
-
+                    console.log(`[audit] trying navigation strategy: ${strategy.name}`);
+                    const opts: any = { timeout: strategy.timeout };
+                    if (strategy.waitUntil) opts.waitUntil = strategy.waitUntil;
+                    
                     response = await page.goto(url, opts);
-                    const status = response?.status() ?? 0;
-                    if (!response || status >= 400) {
-                        throw new Error(`Bad response status ${status} with ${strat.name}`);
+                    if (response && response.ok()) {
+                        console.log(`[audit] navigation successful with: ${strategy.name}`);
+                        navSuccess = true;
+                        break;
                     }
-
-                    // wait for <body> and then soft network idle
-                    await page.waitForSelector('body', { timeout: 8000 }).catch(() => { });
-                    await this.waitForNetworkQuiet(page, 1200, 2, strat.quietTimeout).catch(() => { });
-
-                    // Heuristic content check
-                    const contentOk = await page.evaluate(() => {
-                        const b = document.body;
-                        if (!b) return false;
-                        const textLen = (b.innerText || '').trim().length;
-                        const hasH1 = !!document.querySelector('h1');
-                        return textLen > 50 || hasH1;
-                    });
-
-                    if (!contentOk) {
-                        throw new Error(`Content heuristic failed on "${strat.name}"`);
-                    }
-
-                    navOk = true;
-                    break;
-                } catch (e) {
-                    lastError = e;
-                    console.warn(`[audit] strategy "${strat.name}" failed:`, (e as Error).message);
-                    await new Promise(r => setTimeout(r, 500));
+                } catch (error) {
+                    console.warn(`[audit] strategy "${strategy.name}" failed:`, error);
                     continue;
                 }
             }
 
-            if (!navOk) {
-                console.warn('[audit] all JS navigation strategies failed, attempting HTML-only fallback');
-                return await this.runHtmlOnlyFallback(page, url, lastError);
+            if (!navSuccess || !response) {
+                throw new Error('All navigation strategies failed');
             }
 
-            // Try to dismiss common consent overlays (best-effort)
-            try {
-                await page.evaluate(() => {
-                    const selectors = [
-                        'button[aria-label*="accept"]',
-                        'button:where([id*="accept"],[class*="accept"]):not([disabled])',
-                        'button:where([id*="agree"],[class*="agree"])',
-                        'button:where([id*="allow"],[class*="allow"])',
-                        '[role="button"][data-testid*="accept"]'
-                    ];
-                    for (const sel of selectors) {
-                        const btn = document.querySelector(sel) as HTMLButtonElement | null;
-                        if (btn) { btn.click(); break; }
-                    }
-                });
-            } catch { }
+            console.log('[audit] page loaded, collecting metrics');
 
-            // Collect metrics safely
-            let loadTime = 0;
-            try {
-                const perfNav = await page.evaluate(() => {
-                    try {
-                        const entries = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
-                        if (entries && entries[0]) {
-                            return { loadEventEnd: entries[0].loadEventEnd };
-                        }
-                    } catch { }
-                    return { loadEventEnd: 0 };
-                });
-                loadTime = perfNav.loadEventEnd || 0;
-            } catch { }
+            // Safer performance metrics collection with timeout protection
+            const metricsPromise = page.metrics().catch(e => {
+                console.warn('[audit] metrics collection failed:', e);
+                return {};
+            });
 
-            // crude perf score from load time (ms)
-            const performanceScore = Math.max(0, Math.min(100, 100 - Math.floor(loadTime / 100)));
+            const performanceEntriesPromise = page.evaluate(() => {
+                try {
+                    return JSON.stringify(performance.getEntriesByType('navigation'));
+                } catch {
+                    return '[]';
+                }
+            }).catch(() => '[]');
 
-            // SEO checks (guarded)
-            const seoScore = await page.evaluate(() => {
+            const [metrics, performanceEntries] = await Promise.all([
+                metricsPromise, 
+                performanceEntriesPromise
+            ]);
+
+            const navigationEntries = JSON.parse(performanceEntries);
+            const loadTime = navigationEntries[0]?.loadEventEnd || 0;
+
+            // Simple scoring based on load time and basic checks
+            const performanceScore = Math.max(0, Math.min(100, 100 - (loadTime / 100)));
+
+            // Safer SEO checks with error handling
+            console.log('[audit] running SEO analysis');
+            const seoChecks = await page.evaluate(() => {
                 try {
                     const title = document.title || '';
                     const metaDescription = document.querySelector('meta[name="description"]');
                     const h1s = document.querySelectorAll('h1');
+
                     let score = 0;
                     if (title && title.length > 0 && title.length < 60) score += 25;
                     if (metaDescription && metaDescription.getAttribute('content')) score += 25;
                     if (h1s.length === 1) score += 25;
                     if (document.querySelector('meta[name="viewport"]')) score += 25;
+
                     return score;
-                } catch { return 50; }
+                } catch (error) {
+                    console.warn('SEO evaluation error:', error);
+                    return 50; // Default score on error
+                }
             }).catch(() => 50);
 
-            // Accessibility proxy (guarded)
+            // Safer accessibility checks with error handling
+            console.log('[audit] running accessibility analysis');
             const accessibilityScore = await page.evaluate(() => {
                 try {
-                    const imgs = Array.from(document.querySelectorAll('img'));
-                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const images = document.querySelectorAll('img');
+                    const buttons = document.querySelectorAll('button');
+
                     let score = 100;
-                    imgs.forEach(img => { if (!img.getAttribute('alt')) score -= 10; });
-                    buttons.forEach(btn => { if (!(btn.textContent || '').trim() && !btn.getAttribute('aria-label')) score -= 5; });
+
+                    // Check for alt text on images
+                    for (const img of images) {
+                        if (!img.getAttribute('alt')) {
+                            score -= 10;
+                        }
+                    }
+
+                    // Check for proper button text
+                    for (const button of buttons) {
+                        if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
+                            score -= 5;
+                        }
+                    }
+
                     return Math.max(0, score);
-                } catch { return 70; }
+                } catch (error) {
+                    console.warn('Accessibility evaluation error:', error);
+                    return 70; // Default score on error
+                }
             }).catch(() => 70);
 
+            console.log('[audit] analysis complete, compiling results');
             return {
                 performance: Math.round(performanceScore),
-                seo: seoScore,
+                seo: seoChecks,
                 accessibility: Math.round(accessibilityScore),
                 bestPractices: 75, // Default score
                 metrics: {
-                    loadTime,
+                    loadTime: loadTime,
                     cumulativeLayoutShift: 0 // Simplified
                 },
-                issues: []
+                issues: [] // Simplified - no detailed issues for now
             };
 
         } catch (error) {
             console.error('Audit failed:', error);
             throw error;
         }
-    }
-
-    // --- HTML-only fallback when JS rendering fails ---
-    private async runHtmlOnlyFallback(page: Page, url: string, reason?: unknown) {
-        try {
-            const controller = new AbortController();
-            const t = setTimeout(() => controller.abort(), 15_000);
-            const res = await fetch(url, { method: 'GET', signal: controller.signal });
-            clearTimeout(t);
-
-            const status = res.status;
-            if (!res.ok) throw new Error(`fallback fetch status ${status}`);
-            const html = await res.text();
-
-            await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10_000 }).catch(() => { });
-            // crude proxy for load time based on content size
-            const textLen = html.replace(/<[^>]*>/g, '').trim().length;
-            const loadTime = Math.min(5000, Math.max(500, Math.floor(textLen / 5)));
-
-            const seo = await page.evaluate(() => {
-                try {
-                    const title = document.title || '';
-                    const metaDescription = document.querySelector('meta[name="description"]');
-                    const h1s = document.querySelectorAll('h1');
-                    let score = 0;
-                    if (title && title.length > 0 && title.length < 60) score += 25;
-                    if (metaDescription && metaDescription.getAttribute('content')) score += 25;
-                    if (h1s.length === 1) score += 25;
-                    if (document.querySelector('meta[name="viewport"]')) score += 25;
-                    return score;
-                } catch { return 50; }
-            }).catch(() => 50);
-
-            const accessibility = await page.evaluate(() => {
-                try {
-                    const imgs = Array.from(document.querySelectorAll('img'));
-                    let score = 100;
-                    imgs.forEach(img => { if (!img.getAttribute('alt')) score -= 10; });
-                    return Math.max(0, score);
-                } catch { return 70; }
-            }).catch(() => 70);
-
-            return {
-                performance: Math.max(10, 100 - Math.floor(loadTime / 100)),
-                seo,
-                accessibility: Math.round(accessibility),
-                bestPractices: 70,
-                metrics: { loadTime, cumulativeLayoutShift: 0 },
-                issues: []
-            };
-        } catch (e) {
-            console.error('[audit:fallback] failed:', e, 'original reason:', reason);
-            throw (reason instanceof Error ? reason : e);
-        }
-    }
-
-    // --- Helpers: interception, soft idle, stealth shims ---
-    private async enableRequestInterception(page: Page) {
-        await page.setRequestInterception(true);
-        page.on('request', req => {
-            const url = req.url().toLowerCase();
-            const type = req.resourceType();
-            if (this.BLOCKED_RESOURCE_TYPES.has(type)) return req.abort();
-            if (this.BLOCKED_URL_SUBSTRINGS.some(s => url.includes(s))) return req.abort();
-            return req.continue();
-        });
-    }
-
-    // Wait for a quiet network window (soft network idle)
-    private async waitForNetworkQuiet(page: Page, idleMs = 1200, maxInflight = 2, overallTimeout = 30000) {
-        let inflight = 0;
-        let resolveQuiet!: () => void;
-        let timeoutId: ReturnType<typeof setTimeout> | null = null;
-        let quietTimer: ReturnType<typeof setTimeout> | null = null;
-
-        const clean = () => {
-            page.off('request', onReq);
-            page.off('requestfinished', onDone);
-            page.off('requestfailed', onDone);
-            if (timeoutId) clearTimeout(timeoutId);
-            if (quietTimer) clearTimeout(quietTimer);
-        };
-
-        const onReq = () => {
-            inflight++;
-            if (quietTimer) {
-                clearTimeout(quietTimer);
-                quietTimer = null;
-            }
-        };
-        const onDone = () => {
-            inflight = Math.max(0, inflight - 1);
-            if (inflight <= maxInflight) {
-                if (quietTimer) clearTimeout(quietTimer);
-                quietTimer = setTimeout(() => { clean(); resolveQuiet(); }, idleMs);
-            }
-        };
-
-        const overall = new Promise<void>((_, rej) => {
-            timeoutId = setTimeout(() => {
-                clean();
-                rej(new Error('waitForNetworkQuiet: overall timeout'));
-            }, overallTimeout);
-        });
-
-        const quiet = new Promise<void>(res => { resolveQuiet = res; });
-
-        page.on('request', onReq);
-        page.on('requestfinished', onDone);
-        page.on('requestfailed', onDone);
-
-        // kick the quiet timer if nothing is in flight
-        if (inflight <= maxInflight) {
-            quietTimer = setTimeout(() => { clean(); resolveQuiet(); }, idleMs);
-        }
-
-        await Promise.race([quiet, overall]).finally(clean);
-    }
-
-    private async applyStealthShims(page: Page) {
-        await page.evaluateOnNewDocument(() => {
-            // @ts-ignore
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            // @ts-ignore
-            // some sites check for window.chrome
-            window.chrome = { runtime: {} };
-            // fake languages/plugins
-            // @ts-ignore
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            // @ts-ignore
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-        });
     }
 
     private extractIssues(lhr: any) {
