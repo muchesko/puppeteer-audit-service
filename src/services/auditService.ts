@@ -49,6 +49,11 @@ export class AuditService {
   private activeJobs = 0;
   private readonly maxConcurrentJobs = 1;
 
+  // ---------- Utils ----------
+  private sleep(ms: number) {
+    return new Promise<void>(resolve => setTimeout(resolve, ms));
+  }
+
   // ---------- Browser boot ----------
 
   private pickExecutablePath(): string | undefined {
@@ -59,16 +64,14 @@ export class AuditService {
       '/usr/bin/chromium-browser',
     ].filter(Boolean) as string[];
     for (const p of candidates) {
-      try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+      try { if (fs.existsSync(p)) return p; } catch (_err) { /* ignore */ }
     }
     return undefined;
   }
 
   private async launchBrowser(): Promise<Browser> {
     const executablePath = this.pickExecutablePath();
-
-    // Pipe transport is lighter than WS on small instances
-    const usePipe = true;
+    const usePipe = true; // pipe is lighter on small instances
 
     const args: string[] = [
       '--no-sandbox',
@@ -116,7 +119,7 @@ export class AuditService {
 
   private async getBrowser(): Promise<Browser> {
     if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
-      try { await this.activeBrowser?.close(); } catch { /* ignore */ }
+      try { await this.activeBrowser?.close(); } catch (_err) { /* ignore */ }
       this.activeBrowser = await this.launchBrowser();
     }
     return this.activeBrowser!;
@@ -141,7 +144,7 @@ export class AuditService {
   }
 
   async cleanup(): Promise<void> {
-    try { await this.activeBrowser?.close(); } catch { /* ignore */ }
+    try { await this.activeBrowser?.close(); } catch (_err) { /* ignore */ }
     this.activeBrowser = null;
   }
 
@@ -165,7 +168,7 @@ export class AuditService {
           const head = await fetch(request.websiteUrl, { method: 'HEAD', signal: ctrl.signal, redirect: 'follow' });
           ok = head.ok;
           console.log('[audit] preflight HEAD:', head.status);
-        } catch {
+        } catch (_err) {
           // fallback to tiny GET
           const getCtrl = new AbortController();
           const t2 = setTimeout(() => getCtrl.abort(), 8_000);
@@ -194,7 +197,7 @@ export class AuditService {
           break;
         } catch (e) {
           if (i === 1) throw e;
-          await new Promise(r => setTimeout(r, 2_000));
+          await this.sleep(2_000);
         }
       }
       if (!browser) throw new Error('Browser failed to launch');
@@ -235,15 +238,15 @@ export class AuditService {
       this.sendCallback(fail).catch(err => console.warn('[callback] error (ignored):', err));
     } finally {
       // Close page first
-      try { await page?.close({ runBeforeUnload: false }); } catch { /* ignore */ }
+      try { await page?.close({ runBeforeUnload: false }); } catch (_err) { /* ignore */ }
 
       // Try graceful browser close after each job to prevent leaks
       try {
         await this.activeBrowser?.close();
-      } catch { /* ignore */ }
+      } catch (_err) { /* ignore */ }
 
       // If Chrome is wedged, hard kill the child proc
-      try { this.activeBrowser?.process()?.kill('SIGKILL'); } catch { /* ignore */ }
+      try { this.activeBrowser?.process()?.kill('SIGKILL'); } catch (_err) { /* ignore */ }
       this.activeBrowser = null;
 
       this.activeJobs--;
@@ -278,7 +281,7 @@ export class AuditService {
     });
 
     // Keep layout consistent and avoid print/CSS surprises
-    try { await page.emulateMediaType('screen'); } catch { /* ignore */ }
+    try { await page.emulateMediaType('screen'); } catch (_err) { /* ignore */ }
 
     // Block heavy/irrelevant stuff so “big” sites settle faster
     await page.setRequestInterception(true);
@@ -290,6 +293,10 @@ export class AuditService {
     page.on('request', (req) => {
       const url = req.url();
       const type = req.resourceType();
+      const method = req.method();
+
+      if (method === 'OPTIONS') return req.continue();
+
       const is3p = thirdPartyBlocklist.some(d => url.includes(d));
       if (is3p || type === 'image' || type === 'media' || type === 'font' || type === 'websocket') {
         return req.abort();
@@ -321,7 +328,7 @@ export class AuditService {
     console.log('[audit] navigation ok:', response?.status());
 
     // Ensure body exists (guards against blank documents)
-    try { await page.waitForSelector('body', { timeout: 8_000 }); } catch { /* ignore */ }
+    try { await page.waitForSelector('body', { timeout: 8_000 }); } catch (_err) { /* ignore */ }
 
     // Collect metrics defensively
     console.log('[audit] collecting metrics');
@@ -337,7 +344,7 @@ export class AuditService {
       const nav = JSON.parse(perfJson) as any[];
       const nav0 = nav?.[0] ?? {};
       loadTime = Number.isFinite(nav0.loadEventEnd) ? Math.floor(nav0.loadEventEnd) : 0;
-    } catch { /* ignore */ }
+    } catch (_err) { /* ignore */ }
 
     const performanceScore = Math.max(0, Math.min(100, 100 - Math.floor(loadTime / 100)));
 
@@ -409,69 +416,44 @@ export class AuditService {
     return { jobId: request.jobId, status: 'COMPLETED', results };
   }
 
+  // Forgiving navigation (no networkidle; soft post-nav waits)
   private async progressiveGoto(page: Page, url: string): Promise<HTTPResponse | null> {
-    // “Ready enough” = body exists + document is interactive or complete
-    const considerReady = async () => {
-      try {
-        return await page.evaluate(() => {
-          const rs = document.readyState;
-          return !!document.body && (rs === 'interactive' || rs === 'complete');
-        });
-      } catch {
-        return false;
-      }
-    };
-
-    // Try multiple strategies within a total time budget
-    const totalBudgetMs = 90_000;
-    const start = Date.now();
-
     const attempts: Array<{ name: string; opts: Parameters<Page['goto']>[1] }> = [
-      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 30_000 } },
-      { name: 'load',            opts: { waitUntil: 'load',             timeout: 35_000 } },
+      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 20_000 } },
+      { name: 'load',            opts: { waitUntil: 'load',             timeout: 30_000 } },
       { name: 'basic',           opts: { timeout: 20_000 } }, // no waitUntil
     ];
 
-    let lastResponse: HTTPResponse | null = null;
+    let lastGood: HTTPResponse | null = null;
 
-    for (let i = 0; i < attempts.length; i++) {
-      const { name, opts } = attempts[i];
-      if (Date.now() - start >= totalBudgetMs) break;
-
+    for (const { name, opts } of attempts) {
       try {
         console.log(`[audit] goto (${name})`, opts);
-        const nav = page.goto(url, opts as any);
+        const res = await page.goto(url, opts as any);
 
-        // Per-attempt watchdog so a single strategy can't eat the whole budget
-        const remaining = Math.min((totalBudgetMs - (Date.now() - start)), (opts?.timeout as number) ?? 30_000);
-        const watchdog = new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error('attempt timeout')), Math.max(5_000, remaining))
-        );
+        if (res && res.status() < 400) {
+          lastGood = res;
 
-        lastResponse = await Promise.race([nav, watchdog]) as HTTPResponse | null;
+          // Post-nav soft waits: DOM present + a brief settle
+          try { await page.waitForSelector('body', { timeout: 5_000 }); } catch (_err) { /* ignore */ }
+          try {
+            await page.waitForFunction(
+              () => ['interactive', 'complete'].includes(document.readyState),
+              { timeout: 5_000 }
+            );
+          } catch (_err) { /* ignore */ }
+          await this.sleep(500);
 
-        // Short settle window for SPA boot
-        const settleUntil = Date.now() + 5_000;
-        while (Date.now() < settleUntil) {
-          if (await considerReady()) return lastResponse;
-          await new Promise(r => setTimeout(r, 200));
+          return res;
         }
 
-        // One more immediate check
-        if (await considerReady()) return lastResponse;
-
-        // On final attempt, try a hard reload to break SPA soft-navigation weirdness
-        if (i === attempts.length - 1 && (Date.now() - start) < totalBudgetMs - 5_000) {
-          console.log('[audit] final attempt: hard reload');
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: 25_000 }).catch(() => undefined);
-          if (await considerReady()) return lastResponse;
-        }
+        console.warn(`[audit] goto (${name}) status ${res?.status()}`);
       } catch (e) {
         console.warn(`[audit] goto (${name}) failed:`, (e as Error).message);
-        continue;
       }
     }
 
+    if (lastGood) return lastGood;
     throw new Error('Navigation failed after multiple strategies');
   }
 
