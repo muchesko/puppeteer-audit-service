@@ -11,6 +11,8 @@ export interface AuditRequest {
         mobile?: boolean;
         includeScreenshot?: boolean;
         customUserAgent?: string;
+        /** If true, block common 3P analytics *after* initial nav settles */
+        lightlyBlockTrackers?: boolean;
     };
 }
 
@@ -64,14 +66,14 @@ export class AuditService {
             '/usr/bin/chromium-browser',
         ].filter(Boolean) as string[];
         for (const p of candidates) {
-            try { if (fs.existsSync(p)) return p; } catch (_err) { /* ignore */ }
+            try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
         }
         return undefined;
     }
 
     private async launchBrowser(): Promise<Browser> {
         const executablePath = this.pickExecutablePath();
-        const usePipe = true; // pipe is lighter on small instances
+        const usePipe = true; // lighter on small instances
 
         const args: string[] = [
             '--no-sandbox',
@@ -86,7 +88,7 @@ export class AuditService {
             '--user-data-dir=/tmp/chrome-data',
 
             // keep Chrome lean + help avoid CodeRange OOM
-            '--renderer-process-limit=1',
+            '--renderer-process-limit=2',
             '--js-flags=--jitless',
 
             // trim background work a bit more
@@ -119,7 +121,7 @@ export class AuditService {
 
     private async getBrowser(): Promise<Browser> {
         if (!this.activeBrowser || !this.activeBrowser.isConnected()) {
-            try { await this.activeBrowser?.close(); } catch (_err) { /* ignore */ }
+            try { await this.activeBrowser?.close(); } catch { /* ignore */ }
             this.activeBrowser = await this.launchBrowser();
         }
         return this.activeBrowser!;
@@ -131,8 +133,7 @@ export class AuditService {
         if (this.activeJobs >= this.maxConcurrentJobs) {
             throw new Error('Maximum concurrent jobs reached');
         }
-        // fire-and-forget (no await) – guarded inside
-        this.processAudit(request);
+        this.processAudit(request); // fire-and-forget (guarded internally)
     }
 
     async getAuditStatus(jobId: string): Promise<string | null> {
@@ -144,7 +145,7 @@ export class AuditService {
     }
 
     async cleanup(): Promise<void> {
-        try { await this.activeBrowser?.close(); } catch (_err) { /* ignore */ }
+        try { await this.activeBrowser?.close(); } catch { /* ignore */ }
         this.activeBrowser = null;
     }
 
@@ -158,8 +159,7 @@ export class AuditService {
         try {
             console.log(`[audit] job ${request.jobId} → ${request.websiteUrl}`);
 
-            // Quick preflight so we don't spawn Chrome if URL is obviously dead.
-            // Some sites block HEAD; if HEAD fails, try a small GET with a tiny timeout.
+            // Preflight (HEAD -> tiny GET)
             try {
                 const ctrl = new AbortController();
                 const t = setTimeout(() => ctrl.abort(), 8_000);
@@ -168,8 +168,7 @@ export class AuditService {
                     const head = await fetch(request.websiteUrl, { method: 'HEAD', signal: ctrl.signal, redirect: 'follow' });
                     ok = head.ok;
                     console.log('[audit] preflight HEAD:', head.status);
-                } catch (_err) {
-                    // fallback to tiny GET
+                } catch {
                     const getCtrl = new AbortController();
                     const t2 = setTimeout(() => getCtrl.abort(), 8_000);
                     const get = await fetch(request.websiteUrl, {
@@ -188,7 +187,7 @@ export class AuditService {
                 throw new Error(`Preflight failed: ${(e as Error).message}`);
             }
 
-            // Launch with a small retry
+            // Launch (small retry)
             let browser: Browser | null = null;
             for (let i = 0; i < 2; i++) {
                 try {
@@ -202,14 +201,14 @@ export class AuditService {
             }
             if (!browser) throw new Error('Browser failed to launch');
 
-            // Create page with watchdog (fail fast if renderer dies)
+            // Page + hardening
             page = await this.createPageWithWatchdog(browser, 25_000);
             this.hookPageLogs(page);
             await this.setupPage(page);
 
-            // Job-level watchdog so we never hang forever
+            // Job watchdog
             const jobWatchdog = new Promise<never>((_, rej) =>
-                setTimeout(() => rej(new Error('Job watchdog timeout')), 180_000) // give heavy SPAs more time
+                setTimeout(() => rej(new Error('Job watchdog timeout')), 180_000)
             );
 
             const result = await Promise.race([
@@ -217,7 +216,6 @@ export class AuditService {
                 jobWatchdog,
             ]);
 
-            // persist + callback
             this.jobStatuses.set(request.jobId, 'COMPLETED');
             this.jobResults.set(request.jobId, result);
             console.log(`[audit] job ${request.jobId} completed`, {
@@ -237,18 +235,10 @@ export class AuditService {
             this.jobResults.set(request.jobId, fail);
             this.sendCallback(fail).catch(err => console.warn('[callback] error (ignored):', err));
         } finally {
-            // Close page first
-            try { await page?.close({ runBeforeUnload: false }); } catch (_err) { /* ignore */ }
-
-            // Try graceful browser close after each job to prevent leaks
-            try {
-                await this.activeBrowser?.close();
-            } catch (_err) { /* ignore */ }
-
-            // If Chrome is wedged, hard kill the child proc
-            try { this.activeBrowser?.process()?.kill('SIGKILL'); } catch (_err) { /* ignore */ }
+            try { await page?.close({ runBeforeUnload: false }); } catch { /* ignore */ }
+            try { await this.activeBrowser?.close(); } catch { /* ignore */ }
+            try { this.activeBrowser?.process()?.kill('SIGKILL'); } catch { /* ignore */ }
             this.activeBrowser = null;
-
             this.activeJobs--;
         }
     }
@@ -260,6 +250,10 @@ export class AuditService {
         const created = await Promise.race([
             (async () => {
                 const p = await browser.newPage();
+
+                // Hardening: stealth-ish + SW/CSP tweaks
+                await this.hardenPage(p);
+
                 console.log('[audit] page created');
                 return p;
             })(),
@@ -272,49 +266,92 @@ export class AuditService {
         page.on('console', m => console.log('[console]', m.type(), m.text()));
         page.on('pageerror', e => console.warn('[pageerror]', e.message));
         page.on('requestfailed', r => console.warn('[requestfailed]', r.url(), r.failure()?.errorText));
+        page.on('dialog', async d => { try { await d.dismiss(); } catch { /* ignore */ } });
+    }
+
+    private async hardenPage(page: Page) {
+        try { await page.setBypassCSP(true); } catch { /* ignore */ }
+        try { await page.setJavaScriptEnabled(true); } catch { /* ignore */ }
+
+        // Kill service workers; they can keep network idle from ever happening and alter fetches
+        await page.evaluateOnNewDocument(() => {
+            // @ts-ignore
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            // @ts-ignore
+            const origQuery = navigator.permissions?.query;
+            if (origQuery) {
+                // @ts-ignore
+                navigator.permissions.query = (parameters: any) =>
+                    parameters && parameters.name === 'notifications'
+                        ? Promise.resolve({ state: 'denied' })
+                        : origQuery(parameters);
+            }
+            // Block SW registration
+            try {
+                const sw = navigator.serviceWorker;
+                if (sw && sw.register) {
+                    // @ts-ignore
+                    sw.register = new Proxy(sw.register, { apply() { return Promise.reject(new Error('SW disabled')); } });
+                }
+            } catch { /* ignore */ }
+            // Basic plugins spoof
+            // @ts-ignore
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            // @ts-ignore
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        });
     }
 
     private async setupPage(page: Page): Promise<void> {
         await page.setExtraHTTPHeaders({
             'Accept-Language': 'en-US,en;q=0.9',
             'Upgrade-Insecure-Requests': '1',
+            'DNT': '1',
         });
 
-        // Keep layout consistent and avoid print/CSS surprises
-        try { await page.emulateMediaType('screen'); } catch (_err) { /* ignore */ }
+        try { await page.emulateMediaType('screen'); } catch { /* ignore */ }
 
-        // Block heavy/irrelevant stuff so “big” sites settle faster
-        await page.setRequestInterception(true);
-        const thirdPartyBlocklist = [
-            'googletagmanager.com', 'google-analytics.com', 'doubleclick.net',
-            'facebook.net', 'hotjar.com', 'fullstory.com', 'segment', 'mixpanel',
-            'optimizely', 'stats.g', 'sentry.io', 'newrelic', 'datadog'
-        ];
-        page.on('request', (req) => {
-            const url = req.url();
-            const type = req.resourceType();
-            const method = req.method();
-
-            if (method === 'OPTIONS') return req.continue();
-
-            const is3p = thirdPartyBlocklist.some(d => url.includes(d));
-            if (is3p || type === 'image' || type === 'media' || type === 'font' || type === 'websocket') {
-                return req.abort();
-            }
-            return req.continue();
-        });
-
-        // We drive our own budgets; don't rely on nav timeout
+        // DO NOT block images/fonts by default (too many sites depend on them).
+        // We'll optionally trim analytics after initial settle (see runSinglePageAudit).
         page.setDefaultNavigationTimeout(0);
         page.setDefaultTimeout(60_000);
+        try { await page.setCacheEnabled(false); } catch { /* ignore */ }
+    }
+
+    private async dismissConsents(page: Page) {
+        // Best-effort cookie/consent acceptance; completely optional
+        const selectors = [
+            'button#onetrust-accept-btn-handler',
+            'button[aria-label="Accept all"]',
+            'button[aria-label="Accept All"]',
+            'button:has-text("Accept all")',
+            'button:has-text("Accept All")',
+            'button:has-text("I agree")',
+            'button:has-text("Agree")',
+            'button[mode="primary"]:has-text("Accept")',
+            '[data-testid="uc-accept-all-button"]',
+            'button[aria-label="OK"]',
+        ];
+        for (const sel of selectors) {
+            try {
+                const el = await page.$(sel);
+                if (el) {
+                    await el.click({ delay: 10 }).catch(() => undefined);
+                    await this.sleep(300);
+                }
+            } catch { /* ignore */ }
+        }
     }
 
     private async runSinglePageAudit(page: Page, request: AuditRequest): Promise<AuditResult> {
-        const ua = request.options?.customUserAgent || config?.lighthouse?.settings?.emulatedUserAgent || 'Mozilla/5.0';
-        console.log('[audit] setUserAgent');
+        const ua =
+            request.options?.customUserAgent ||
+            config?.lighthouse?.settings?.emulatedUserAgent ||
+            // A realistic desktop UA:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36';
+
         await page.setUserAgent(ua);
 
-        console.log('[audit] setViewport');
         if (request.options?.mobile) {
             await page.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
         } else {
@@ -323,74 +360,98 @@ export class AuditService {
             await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
         }
 
-        console.log('[audit] navigating', request.websiteUrl);
+        // Navigate (forgiving, with global budget)
         const response = await this.progressiveGoto(page, request.websiteUrl);
-        console.log('[audit] navigation ok:', response?.status());
+        console.log('[audit] navigation ok-ish:', response?.status());
 
-        // Ensure body exists (guards against blank documents)
-        try { await page.waitForSelector('body', { timeout: 8_000 }); } catch (_err) { /* ignore */ }
+        // Try dismissing cookie walls (non-fatal)
+        await this.dismissConsents(page);
 
-        // Collect metrics defensively
-        console.log('[audit] collecting metrics');
-        const perfJson = await page
-            .evaluate(() => {
-                try { return JSON.stringify(performance.getEntriesByType('navigation')); }
-                catch { return '[]'; }
-            })
-            .catch(() => '[]');
+        // Optional: after initial settle, lightly block analytics to stabilize SPAs during metric reads
+        if (request.options?.lightlyBlockTrackers) {
+            const thirdPartyBlocklist = [
+                'googletagmanager.com', 'google-analytics.com', 'doubleclick.net',
+                'facebook.net', 'hotjar.com', 'fullstory.com', 'segment', 'mixpanel',
+                'optimizely', 'stats.g', 'sentry.io', 'newrelic', 'datadog'
+            ];
+
+            try {
+                await page.setRequestInterception(true);
+                page.on('request', (req) => {
+                    try {
+                        const url = req.url();
+                        const rt = (typeof req.resourceType === 'function'
+                            ? String(req.resourceType()).toLowerCase()
+                            : '').toLowerCase();
+
+                        const is3p = thirdPartyBlocklist.some(d => url.includes(d));
+
+                        // Only block non-critical background traffic from these vendors
+                        if (is3p && (rt === 'xhr' || rt === 'fetch' || rt === 'ping' || rt === 'eventsource' || rt === 'other')) {
+                            return req.abort();
+                        }
+                    } catch {
+                        // fall through
+                    }
+                    try { return req.continue(); } catch { /* ignore */ }
+                });
+            } catch { /* ignore */ }
+        }
+
+        // Ensure DOM (guards against blank docs)
+        try { await page.waitForSelector('body', { timeout: 10_000 }); } catch { /* ignore */ }
+
+        // Collect metrics
+        const perfJson = await page.evaluate(() => {
+            try { return JSON.stringify(performance.getEntriesByType('navigation')); }
+            catch { return '[]'; }
+        }).catch(() => '[]');
 
         let loadTime = 0;
         try {
             const nav = JSON.parse(perfJson) as any[];
             const nav0 = nav?.[0] ?? {};
             loadTime = Number.isFinite(nav0.loadEventEnd) ? Math.floor(nav0.loadEventEnd) : 0;
-        } catch (_err) { /* ignore */ }
+        } catch { /* ignore */ }
 
         const performanceScore = Math.max(0, Math.min(100, 100 - Math.floor(loadTime / 100)));
 
-        // Basic SEO
-        console.log('[audit] SEO checks');
-        const seoScore = await page
-            .evaluate(() => {
-                try {
-                    const title = document.title || '';
-                    const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content');
-                    const h1s = document.querySelectorAll('h1');
-                    let score = 0;
-                    if (title && title.length > 0 && title.length <= 60) score += 25;
-                    if (metaDescription && metaDescription.length > 0) score += 25;
-                    if (h1s.length === 1) score += 25;
-                    if (document.querySelector('meta[name="viewport"]')) score += 25;
-                    return score;
-                } catch { return 50; }
-            })
-            .catch(() => 50);
+        // SEO
+        const seoScore = await page.evaluate(() => {
+            try {
+                const title = document.title || '';
+                const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content');
+                const h1s = document.querySelectorAll('h1');
+                let score = 0;
+                if (title && title.length > 0 && title.length <= 60) score += 25;
+                if (metaDescription && (metaDescription?.length ?? 0) > 0) score += 25;
+                if (h1s.length === 1) score += 25;
+                if (document.querySelector('meta[name="viewport"]')) score += 25;
+                return score;
+            } catch { return 50; }
+        }).catch(() => 50);
 
-        // Basic a11y
-        console.log('[audit] accessibility checks');
-        const accessibilityScore = await page
-            .evaluate(() => {
-                try {
-                    const images = Array.from(document.querySelectorAll('img'));
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    let score = 100;
-                    for (const img of images) {
-                        if (!img.getAttribute('alt')) score -= 10;
-                    }
-                    for (const btn of buttons) {
-                        const hasText = !!btn.textContent?.trim();
-                        const hasLabel = !!btn.getAttribute('aria-label');
-                        if (!hasText && !hasLabel) score -= 5;
-                    }
-                    return Math.max(0, score);
-                } catch { return 70; }
-            })
-            .catch(() => 70);
+        // Accessibility (very rough)
+        const accessibilityScore = await page.evaluate(() => {
+            try {
+                const images = Array.from(document.querySelectorAll('img'));
+                const buttons = Array.from(document.querySelectorAll('button'));
+                let score = 100;
+                for (const img of images) {
+                    if (!img.getAttribute('alt')) score -= 10;
+                }
+                for (const btn of buttons) {
+                    const hasText = !!btn.textContent?.trim();
+                    const hasLabel = !!btn.getAttribute('aria-label');
+                    if (!hasText && !hasLabel) score -= 5;
+                }
+                return Math.max(0, score);
+            } catch { return 70; }
+        }).catch(() => 70);
 
         // Optional screenshot
         let screenshot: string | undefined;
         if (request.options?.includeScreenshot) {
-            console.log('[audit] screenshot');
             try {
                 const buf = await page.screenshot({ type: 'png', fullPage: false });
                 screenshot = Buffer.from(buf).toString('base64');
@@ -404,10 +465,7 @@ export class AuditService {
             seoScore,
             accessibilityScore: Math.round(accessibilityScore),
             bestPracticesScore: 75,
-            metrics: {
-                loadTime,
-                cumulativeLayoutShift: 0,
-            },
+            metrics: { loadTime, cumulativeLayoutShift: 0 },
             pagesCrawled: 1,
             screenshot,
             issues: [] as Issues,
@@ -416,9 +474,8 @@ export class AuditService {
         return { jobId: request.jobId, status: 'COMPLETED', results };
     }
 
-    // Forgiving navigation with a global time budget and "ready enough" checks
+    // Forgiving navigation with a global budget + “ready enough” checks + salvage fallbacks
     private async progressiveGoto(page: Page, url: string): Promise<HTTPResponse | null> {
-        // "Ready enough" = body exists + document is interactive or complete
         const considerReady = async () => {
             try {
                 return await page.evaluate(() => {
@@ -430,27 +487,25 @@ export class AuditService {
             }
         };
 
-        // Global budget so we never blow up on slow sites
-        const totalBudgetMs = 120_000; // was effectively ~70–90s; now more tolerant
+        const totalBudgetMs = 120_000;
         const start = Date.now();
 
-        const attempts: Array<{ name: string; opts: Parameters<Page['goto']>[1] }> = [
+        const strategies: Array<{ name: string; opts: Parameters<Page['goto']>[1] }> = [
             { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 30_000 } },
             { name: 'load', opts: { waitUntil: 'load', timeout: 35_000 } },
-            { name: 'basic', opts: { timeout: 20_000 } }, // no waitUntil
+            { name: 'basic', opts: { timeout: 25_000 } }, // no waitUntil
         ];
 
-        let lastResponse: HTTPResponse | null = null;
+        let bestResp: HTTPResponse | null = null;
 
-        for (let i = 0; i < attempts.length; i++) {
-            const { name, opts } = attempts[i];
+        for (let i = 0; i < strategies.length; i++) {
+            const { name, opts } = strategies[i];
             if (Date.now() - start >= totalBudgetMs) break;
 
             try {
                 console.log(`[audit] goto (${name})`, opts);
-                const nav = page.goto(url, opts as any);
+                const navPromise = page.goto(url, opts as any);
 
-                // Per-attempt watchdog: don't let a single strategy eat all time
                 const remaining = Math.max(5_000,
                     Math.min(totalBudgetMs - (Date.now() - start), (opts?.timeout as number) ?? 30_000)
                 );
@@ -458,31 +513,24 @@ export class AuditService {
                     setTimeout(() => rej(new Error('attempt timeout')), remaining)
                 );
 
-                lastResponse = await Promise.race([nav, watchdog]) as HTTPResponse | null;
+                const resp = await Promise.race([navPromise, watchdog]) as HTTPResponse | null;
+                if (resp) bestResp = resp;
 
-                // If the HTTP status is OK, run a short settle window
-                if (lastResponse && lastResponse.status() < 400) {
-                    // Ensure DOM is present
-                    try { await page.waitForSelector('body', { timeout: 5_000 }); } catch { }
+                // quick DOM + settle checks even on non-200s (some sites return 3xx/4xx but render)
+                try { await page.waitForSelector('body', { timeout: 8_000 }); } catch { /* ignore */ }
 
-                    // 10s settle loop for SPA hydration / late scripts
-                    const settleUntil = Date.now() + 10_000; // was 0.5–5s; this is more forgiving
-                    while (Date.now() < settleUntil) {
-                        if (await considerReady()) return lastResponse;
-                        await new Promise(r => setTimeout(r, 200));
-                    }
+                const settleUntil = Date.now() + 10_000;
+                while (Date.now() < settleUntil) {
+                    if (await considerReady()) return resp;
+                    await this.sleep(200);
+                }
+                if (await considerReady()) return resp;
 
-                    // Final immediate check
-                    if (await considerReady()) return lastResponse;
-
-                    // On last attempt, try a hard reload to break weird soft-navigation states
-                    if (i === attempts.length - 1 && (Date.now() - start) < totalBudgetMs - 5_000) {
-                        console.log('[audit] final attempt: hard reload');
-                        await page.reload({ waitUntil: 'domcontentloaded', timeout: 25_000 }).catch(() => undefined);
-                        if (await considerReady()) return lastResponse;
-                    }
-                } else {
-                    console.warn(`[audit] goto (${name}) status ${lastResponse?.status()}`);
+                // Final attempt add: hard reload to break SPA soft-nav stalls
+                if (i === strategies.length - 1 && (Date.now() - start) < totalBudgetMs - 6_000) {
+                    console.log('[audit] final attempt: hard reload');
+                    await page.reload({ waitUntil: 'domcontentloaded', timeout: 25_000 }).catch(() => undefined);
+                    if (await considerReady()) return resp;
                 }
             } catch (e) {
                 console.warn(`[audit] goto (${name}) failed:`, (e as Error).message);
@@ -490,7 +538,19 @@ export class AuditService {
             }
         }
 
-        if (lastResponse) return lastResponse; // fall back to the best we saw
+        // SALVAGE: if we navigated *somewhere*, continue with bestResp instead of hard fail
+        if (bestResp) {
+            console.warn('[audit] navigation salvage: proceeding with best available response');
+            return bestResp;
+        }
+
+        // Last-ditch: try opening in a new blank context without any waits, one short shot
+        try {
+            console.warn('[audit] last-ditch basic navigation');
+            const r = await page.goto(url, { timeout: 15_000 } as any).catch(() => null);
+            if (r) return r;
+        } catch { /* ignore */ }
+
         throw new Error('Navigation failed after multiple strategies');
     }
 
