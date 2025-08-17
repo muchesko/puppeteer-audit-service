@@ -117,6 +117,9 @@ export class AuditService {
                 '--use-mock-keychain',
                 '--window-size=1366,900',
                 '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests'
+                '--js-flags=--max-old-space-size=192',
+                '--disable-features=AudioServiceOutOfProcess,BackForwardCache,TranslateUI',
+                '--disable-backgrounding-occluded-windows',
             ];
 
             const launchOpts: LaunchOptions = {
@@ -124,8 +127,8 @@ export class AuditService {
                 pipe: usePipe,           // false => WebSocket transport
                 executablePath,
                 args,
-                timeout: 120_000,
-                protocolTimeout: 180_000,
+                timeout: 180_000,
+                protocolTimeout: 240_000,
                 dumpio: true
             };
 
@@ -261,16 +264,15 @@ export class AuditService {
                 this.sendCallback(resultPayload).catch(err => console.warn('Callback error (ignored):', err));
 
             } finally {
-                try { await page.close(); } catch (error) { console.warn('Page close error (ignored):', error); }
+                // Always close the page
                 try {
-                    if (this.activeBrowser) {
-                        await this.activeBrowser.close();
-                        this.activeBrowser = null;
-                        console.log('Browser closed after job completion');
-                    }
+                    await page.close();
                 } catch (error) {
-                    console.warn('Browser close error (ignored):', error);
+                    console.warn('Page close error (ignored):', error);
                 }
+
+                // DO NOT close the shared browser here — keep it warm for the next job.
+                // Browser is closed explicitly via cleanup(), or on crash handling.
             }
 
         } catch (error) {
@@ -279,8 +281,8 @@ export class AuditService {
                 jobId: request.jobId,
                 status: 'FAILED',
                 results: undefined,
-                error: error instanceof Error ? 
-                    `${error.name}: ${error.message}` : 
+                error: error instanceof Error ?
+                    `${error.name}: ${error.message}` :
                     'Unknown audit error'
             };
             this.jobResults.set(request.jobId, errorResult);
@@ -313,7 +315,7 @@ export class AuditService {
             'Accept-Language': 'en-US,en;q=0.9',
             'Upgrade-Insecure-Requests': '1',
         });
-        try { await page.emulateTimezone('America/New_York'); } catch {}
+        try { await page.emulateTimezone('America/New_York'); } catch { }
 
         const ua = this.buildUserAgent(req.options?.mobile, req.options?.customUserAgent);
         await page.setUserAgent(ua);
@@ -402,7 +404,7 @@ export class AuditService {
 
         while (Date.now() - start < maxWaitMs) {
             if (inflight === 0 && await stableDOM()) {
-                try { await page.evaluate(() => (document as any).fonts && (document as any).fonts.ready); } catch {}
+                try { await page.evaluate(() => (document as any).fonts && (document as any).fonts.ready); } catch { }
                 await page.evaluate(() => new Promise(requestAnimationFrame));
                 await page.evaluate(() => new Promise(requestAnimationFrame));
                 if (Date.now() - lastQuiet >= quietMs) break;
@@ -435,7 +437,7 @@ export class AuditService {
                     }, 50);
                 });
             }, maxPixels);
-        } catch {}
+        } catch { }
     }
 
     private async runLighthouseAudit(
