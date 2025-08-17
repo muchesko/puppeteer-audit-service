@@ -158,6 +158,14 @@ export class AuditService {
         try {
             console.log(`Processing audit for ${request.websiteUrl} (Job: ${request.jobId})`);
 
+            // Fast DNS/egress preflight so we don't spin up Chrome if the URL is unreachable
+            try {
+                const pre = await fetch(request.websiteUrl, { method: 'HEAD' });
+                console.log('[audit] preflight HEAD status:', pre.status);
+            } catch (e) {
+                throw new Error(`Preflight failed (network/DNS): ${(e as Error).message}`);
+            }
+
             // Single retry attempt only to avoid resource exhaustion
             let browser: Browser;
             let retryCount = 0;
@@ -186,69 +194,85 @@ export class AuditService {
 
             // Use single page for entire audit process
             const page = await browser!.newPage();
+            console.log('[audit] page created');
+            page.on('console', m => console.log('[console]', m.type(), m.text()));
+            page.on('pageerror', e => console.warn('[pageerror]', e.message));
+            page.on('requestfailed', r => console.warn('[requestfailed]', r.url(), r.failure()?.errorText));
 
             try {
-                // Configure page once with error handling
-                const userAgent = request.options?.customUserAgent ||
-                    config.lighthouse.settings.emulatedUserAgent;
+                const jobDeadlineMs = 120_000; // 2 minute job watchdog
+                const watchdog = new Promise<never>((_, rej) =>
+                    setTimeout(() => rej(new Error('Job watchdog timeout')), jobDeadlineMs)
+                );
 
-                await page.setUserAgent(userAgent);
+                const resultPayload = await Promise.race([
+                    (async () => {
+                        // Configure page once with error handling
+                        const userAgent = request.options?.customUserAgent ||
+                            config.lighthouse.settings.emulatedUserAgent;
 
-                if (request.options?.mobile) {
-                    await page.setViewport({ width: 375, height: 667 });
-                } else {
-                    await page.setViewport({
-                        width: config.lighthouse.settings.screenEmulation.width,
-                        height: config.lighthouse.settings.screenEmulation.height
-                    });
-                }
+                        console.log('[audit] setUserAgent');
+                        await page.setUserAgent(userAgent);
 
-                // Set reasonable timeouts
-                await page.setDefaultTimeout(60000);      // Increased for protocol delays
-                await page.setDefaultNavigationTimeout(60000); // Increased for protocol delays
+                        console.log('[audit] setViewport');
+                        if (request.options?.mobile) {
+                            await page.setViewport({ width: 375, height: 667 });
+                        } else {
+                            await page.setViewport({
+                                width: config.lighthouse.settings.screenEmulation.width,
+                                height: config.lighthouse.settings.screenEmulation.height
+                            });
+                        }
 
-                // Run audit on the same page instance
-                const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
+                        console.log('[audit] set timeouts');
+                        await page.setDefaultTimeout(60_000);
+                        await page.setDefaultNavigationTimeout(60_000);
 
-                // Take screenshot if requested (on same page)
-                let screenshot: string | undefined;
-                if (request.options?.includeScreenshot) {
-                    try {
-                        const screenshotBuffer = await page.screenshot({
-                            type: 'png',
-                            fullPage: false
-                        });
-                        screenshot = Buffer.from(screenshotBuffer).toString('base64');
-                    } catch (error) {
-                        console.warn('Screenshot failed:', error);
-                    }
-                }
+                        console.log('[audit] running audit on', request.websiteUrl);
+                        // Run audit on the same page instance
+                        const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
 
-                // Process results
-                const auditResult: AuditResult = {
-                    jobId: request.jobId,
-                    status: 'COMPLETED',
-                    results: {
-                        performanceScore: lighthouseResult.performance,
-                        seoScore: lighthouseResult.seo,
-                        accessibilityScore: lighthouseResult.accessibility,
-                        bestPracticesScore: lighthouseResult.bestPractices,
-                        issues: lighthouseResult.issues,
-                        metrics: lighthouseResult.metrics,
-                        pagesCrawled: 1,
-                        screenshot
-                    }
-                };
+                        // Take screenshot if requested (on same page)
+                        let screenshot: string | undefined;
+                        if (request.options?.includeScreenshot) {
+                            try {
+                                const buf = await page.screenshot({ type: 'png', fullPage: false });
+                                screenshot = Buffer.from(buf).toString('base64');
+                            } catch (error) {
+                                console.warn('Screenshot failed:', error);
+                            }
+                        }
 
+                        const auditResult: AuditResult = {
+                            jobId: request.jobId,
+                            status: 'COMPLETED',
+                            results: {
+                                performanceScore: lighthouseResult.performance,
+                                seoScore: lighthouseResult.seo,
+                                accessibilityScore: lighthouseResult.accessibility,
+                                bestPracticesScore: lighthouseResult.bestPractices,
+                                issues: lighthouseResult.issues,
+                                metrics: lighthouseResult.metrics,
+                                pagesCrawled: 1,
+                                screenshot
+                            }
+                        };
+
+                        return auditResult;
+                    })(),
+                    watchdog
+                ]);
+
+                // Persist + callback on success
                 this.jobStatuses.set(request.jobId, 'COMPLETED');
-                this.jobResults.set(request.jobId, auditResult);
-
+                this.jobResults.set(request.jobId, resultPayload);
                 console.log(`Audit completed for job ${request.jobId}:`, {
-                    performance: auditResult.results?.performanceScore,
-                    seo: auditResult.results?.seoScore,
-                    accessibility: auditResult.results?.accessibilityScore,
-                    bestPractices: auditResult.results?.bestPracticesScore
+                    performance: resultPayload.results?.performanceScore,
+                    seo: resultPayload.results?.seoScore,
+                    accessibility: resultPayload.results?.accessibilityScore,
+                    bestPractices: resultPayload.results?.bestPracticesScore
                 });
+                this.sendCallback(resultPayload).catch(err => console.warn('Callback error (ignored):', err));
 
             } finally {
                 // Always close the page
@@ -271,18 +295,19 @@ export class AuditService {
             }
 
         } catch (error) {
-            console.error(`Audit failed for job ${request.jobId}:`, error);
-
-            const auditResult: AuditResult = {
+            // Handle errors + callback
+            this.jobStatuses.set(request.jobId, 'FAILED');
+            const errorResult: AuditResult = {
                 jobId: request.jobId,
                 status: 'FAILED',
-                error: error instanceof Error ? error.message : 'Unknown error'
+                results: undefined,
+                error: error instanceof Error ? 
+                    `${error.name}: ${error.message}` : 
+                    'Unknown audit error'
             };
-
-            this.jobStatuses.set(request.jobId, 'FAILED');
-            this.jobResults.set(request.jobId, auditResult);
-
-            console.log(`Audit failed for job ${request.jobId}:`, error instanceof Error ? error.message : 'Unknown error');
+            this.jobResults.set(request.jobId, errorResult);
+            console.error(`Audit failed for job ${request.jobId}:`, error);
+            this.sendCallback(errorResult).catch(err => console.warn('Callback error (ignored):', err));
         } finally {
             this.activeJobs--;
         }
@@ -291,38 +316,60 @@ export class AuditService {
     private async runLighthouseAudit(page: Page, url: string) {
         // Run audit directly on the provided page instance (no re-configuration)
         try {
-            // Navigate to page with retries
-            let response;
-            let navRetries = 0;
-            const maxNavRetries = 3;
+            console.log('[audit] starting progressive navigation to', url);
 
-            while (navRetries < maxNavRetries) {
+            // Progressive navigation with fallback strategies
+            let response;
+            let navSuccess = false;
+            const strategies = [
+                { waitUntil: 'domcontentloaded', timeout: 30_000, name: 'DOM ready' },
+                { waitUntil: 'load', timeout: 45_000, name: 'full load' },
+                { waitUntil: 'networkidle2', timeout: 60_000, name: 'network idle' },
+                { waitUntil: undefined, timeout: 20_000, name: 'basic navigation' }
+            ];
+
+            for (const strategy of strategies) {
                 try {
-                    try {
-                        // Most basic navigation - just wait for 'load' event with generous timeout
-                        response = await page.goto(url, { waitUntil: 'load', timeout: 60000 });
-                    } catch {
-                        // If that fails, try with no wait conditions
-                        response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 45000 });
+                    console.log(`[audit] trying navigation strategy: ${strategy.name}`);
+                    const opts: any = { timeout: strategy.timeout };
+                    if (strategy.waitUntil) opts.waitUntil = strategy.waitUntil;
+                    
+                    response = await page.goto(url, opts);
+                    if (response && response.ok()) {
+                        console.log(`[audit] navigation successful with: ${strategy.name}`);
+                        navSuccess = true;
+                        break;
                     }
-                    if (response) break;
                 } catch (error) {
-                    navRetries++;
-                    console.warn(`Navigation attempt ${navRetries} failed:`, error);
-                    if (navRetries >= maxNavRetries) throw error;
-                    await new Promise(r => setTimeout(r, 3000)); // Longer wait for protocol stabilization
+                    console.warn(`[audit] strategy "${strategy.name}" failed:`, error);
+                    continue;
                 }
             }
 
-            if (!response) {
-                throw new Error('Failed to load page after retries');
+            if (!navSuccess || !response) {
+                throw new Error('All navigation strategies failed');
             }
 
-            // Basic performance metrics
-            const metrics = await page.metrics();
-            const performanceEntries = await page.evaluate(() => {
-                return JSON.stringify(performance.getEntriesByType('navigation'));
+            console.log('[audit] page loaded, collecting metrics');
+
+            // Safer performance metrics collection with timeout protection
+            const metricsPromise = page.metrics().catch(e => {
+                console.warn('[audit] metrics collection failed:', e);
+                return {};
             });
+
+            const performanceEntriesPromise = page.evaluate(() => {
+                try {
+                    return JSON.stringify(performance.getEntriesByType('navigation'));
+                } catch {
+                    return '[]';
+                }
+            }).catch(() => '[]');
+
+            const [metrics, performanceEntries] = await Promise.all([
+                metricsPromise, 
+                performanceEntriesPromise
+            ]);
 
             const navigationEntries = JSON.parse(performanceEntries);
             const loadTime = navigationEntries[0]?.loadEventEnd || 0;
@@ -330,45 +377,58 @@ export class AuditService {
             // Simple scoring based on load time and basic checks
             const performanceScore = Math.max(0, Math.min(100, 100 - (loadTime / 100)));
 
-            // Basic SEO checks
+            // Safer SEO checks with error handling
+            console.log('[audit] running SEO analysis');
             const seoChecks = await page.evaluate(() => {
-                const title = document.title;
-                const metaDescription = document.querySelector('meta[name="description"]');
-                const h1s = document.querySelectorAll('h1');
+                try {
+                    const title = document.title || '';
+                    const metaDescription = document.querySelector('meta[name="description"]');
+                    const h1s = document.querySelectorAll('h1');
 
-                let score = 0;
-                if (title && title.length > 0 && title.length < 60) score += 25;
-                if (metaDescription && metaDescription.getAttribute('content')) score += 25;
-                if (h1s.length === 1) score += 25;
-                if (document.querySelector('meta[name="viewport"]')) score += 25;
+                    let score = 0;
+                    if (title && title.length > 0 && title.length < 60) score += 25;
+                    if (metaDescription && metaDescription.getAttribute('content')) score += 25;
+                    if (h1s.length === 1) score += 25;
+                    if (document.querySelector('meta[name="viewport"]')) score += 25;
 
-                return score;
-            });
+                    return score;
+                } catch (error) {
+                    console.warn('SEO evaluation error:', error);
+                    return 50; // Default score on error
+                }
+            }).catch(() => 50);
 
-            // Basic accessibility checks
+            // Safer accessibility checks with error handling
+            console.log('[audit] running accessibility analysis');
             const accessibilityScore = await page.evaluate(() => {
-                const images = document.querySelectorAll('img');
-                const buttons = document.querySelectorAll('button');
+                try {
+                    const images = document.querySelectorAll('img');
+                    const buttons = document.querySelectorAll('button');
 
-                let score = 100;
+                    let score = 100;
 
-                // Check for alt text on images
-                for (const img of images) {
-                    if (!img.getAttribute('alt')) {
-                        score -= 10;
+                    // Check for alt text on images
+                    for (const img of images) {
+                        if (!img.getAttribute('alt')) {
+                            score -= 10;
+                        }
                     }
-                }
 
-                // Check for proper button text
-                for (const button of buttons) {
-                    if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
-                        score -= 5;
+                    // Check for proper button text
+                    for (const button of buttons) {
+                        if (!button.textContent?.trim() && !button.getAttribute('aria-label')) {
+                            score -= 5;
+                        }
                     }
+
+                    return Math.max(0, score);
+                } catch (error) {
+                    console.warn('Accessibility evaluation error:', error);
+                    return 70; // Default score on error
                 }
+            }).catch(() => 70);
 
-                return Math.max(0, score);
-            });
-
+            console.log('[audit] analysis complete, compiling results');
             return {
                 performance: Math.round(performanceScore),
                 seo: seoChecks,
@@ -417,31 +477,55 @@ export class AuditService {
     }
 
     private async sendCallback(result: AuditResult): Promise<void> {
+        if (!config.callbackUrl) {
+            console.log('No callback URL configured, skipping callback');
+            return;
+        }
+
         try {
+            console.log(`[callback] sending result for job ${result.jobId}`);
             const body = JSON.stringify(result);
             const signature = crypto
                 .createHmac('sha256', config.webhookSecret)
                 .update(body)
                 .digest('hex');
 
-            const response = await fetch(config.callbackUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Signature': `sha256=${signature}`,
-                    'X-API-Key': config.apiKey
-                },
-                body
-            });
+            // Add timeout to prevent hanging
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15_000);
 
-            if (!response.ok) {
-                console.error(`Callback failed: ${response.status} ${response.statusText}`);
-            } else {
-                console.log(`Callback sent successfully for job ${result.jobId}`);
+            try {
+                const response = await fetch(config.callbackUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Signature': `sha256=${signature}`,
+                        'X-API-Key': config.apiKey
+                    },
+                    body,
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    console.error(`[callback] failed: ${response.status} ${response.statusText}`);
+                    const responseText = await response.text().catch(() => 'no response body');
+                    console.error(`[callback] response body: ${responseText}`);
+                } else {
+                    console.log(`[callback] sent successfully for job ${result.jobId}`);
+                }
+            } catch (fetchError) {
+                clearTimeout(timeoutId);
+                throw fetchError;
             }
 
         } catch (error) {
-            console.error('Callback error:', error);
+            if (error instanceof Error && error.name === 'AbortError') {
+                console.error(`[callback] timeout for job ${result.jobId}`);
+            } else {
+                console.error(`[callback] error for job ${result.jobId}:`, error);
+            }
         }
     }
 

@@ -25,13 +25,38 @@ app.use(cors({
   credentials: true
 }));
 
-// Rate limiting - with proper proxy support
+// Rate limiting - with proper proxy support and skip handling
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  // Skip function to handle proxy detection failures gracefully
+  skip: (req) => {
+    // If we can't determine the real IP, allow the request
+    if (!req.ip || req.ip === '::1' || req.ip === '127.0.0.1') {
+      console.warn(`[rate-limit] unable to determine real IP for request, allowing: ${req.ip}`);
+      return true;
+    }
+    return false;
+  },
+  // Custom key generator that handles proxy edge cases
+  keyGenerator: (req) => {
+    const forwarded = req.headers['x-forwarded-for'];
+    const realIp = req.headers['x-real-ip'];
+    const ip = req.ip;
+    
+    // Try to get the most reliable IP address
+    let clientIp = ip;
+    if (typeof forwarded === 'string' && forwarded) {
+      clientIp = forwarded.split(',')[0].trim();
+    } else if (typeof realIp === 'string' && realIp) {
+      clientIp = realIp;
+    }
+    
+    return clientIp || 'unknown';
+  }
 });
 app.use(limiter);
 

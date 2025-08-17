@@ -47,15 +47,26 @@ const callbackSchema = z.object({
 
 // Start audit
 router.post('/start', async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  let jobId: string | undefined;
+  
   try {
+    console.log('[route] validating audit request');
     const validatedData = auditRequestSchema.parse(req.body);
+    
     // Use provided jobId when present so the caller can track status by the same ID
-    const jobId = validatedData.jobId || crypto.randomUUID();
+    jobId = validatedData.jobId || crypto.randomUUID();
     
-    console.log(`Starting audit for job ${jobId}: ${validatedData.url}`);
+    console.log(`[route] starting audit for job ${jobId}: ${validatedData.url}`);
     
-    // Start audit asynchronously
-    auditService.startAudit({
+    // Add request timeout protection
+    const requestTimeout = 5_000; // 5 seconds for route handler
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Route handler timeout')), requestTimeout);
+    });
+    
+    // Start audit asynchronously with timeout protection
+    const auditPromise = auditService.startAudit({
       jobId,
       websiteUrl: validatedData.url,
       priority: validatedData.priority,
@@ -65,18 +76,26 @@ router.post('/start', async (req: Request, res: Response) => {
         customUserAgent: undefined,
         includeScreenshot: validatedData.options?.screenshot
       }
-    })
-      .catch((error: Error) => {
-        console.error(`Audit failed for job ${jobId}:`, error);
-      });
+    }).catch((error: Error) => {
+      console.error(`[route] audit failed for job ${jobId}:`, error);
+      // Don't throw here - we want the route to return 202 even if audit fails
+    });
+    
+    // Race the audit start against timeout
+    await Promise.race([auditPromise, timeoutPromise]);
+    
+    const duration = Date.now() - startTime;
+    console.log(`[route] audit ${jobId} queued successfully in ${duration}ms`);
     
     res.status(202).json({ 
       message: 'Audit started successfully',
-      jobId: jobId
+      jobId: jobId,
+      estimatedCompletion: '2-3 minutes'
     });
     
   } catch (error) {
-    console.error('Audit start error:', error);
+    const duration = Date.now() - startTime;
+    console.error(`[route] audit start error for job ${jobId} after ${duration}ms:`, error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
@@ -85,32 +104,78 @@ router.post('/start', async (req: Request, res: Response) => {
       });
     }
     
+    if (error instanceof Error && error.message === 'Route handler timeout') {
+      return res.status(202).json({
+        message: 'Audit queued (may take longer due to resource constraints)',
+        jobId: jobId || 'unknown',
+        warning: 'Initial processing timed out but audit may still complete'
+      });
+    }
+    
     res.status(500).json({ 
       error: 'Failed to start audit',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      message: error instanceof Error ? error.message : 'Unknown error',
+      jobId: jobId || 'unknown'
     });
   }
 });
 
 // Get audit status
 router.get('/status/:jobId', async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  
   try {
     const { jobId } = req.params;
-    const status = await auditService.getAuditStatus(jobId);
-    const details = await auditService.getAuditDetails(jobId);
+    console.log(`[route] checking status for job ${jobId}`);
+    
+    if (!jobId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
+      return res.status(400).json({
+        error: 'Invalid job ID format',
+        jobId
+      });
+    }
+    
+    // Add timeout protection for status checks
+    const statusTimeout = 3_000; // 3 seconds
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Status check timeout')), statusTimeout);
+    });
+    
+    const [status, details] = await Promise.race([
+      Promise.all([
+        auditService.getAuditStatus(jobId),
+        auditService.getAuditDetails(jobId)
+      ]),
+      timeoutPromise
+    ]);
+    
+    const duration = Date.now() - startTime;
+    console.log(`[route] status check for ${jobId} completed in ${duration}ms: ${status || 'NOT_FOUND'}`);
     
     res.json({ 
       jobId,
       status: status || 'NOT_FOUND',
       results: details?.results,
-      error: details?.error
+      error: details?.error,
+      timestamp: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('Status check error:', error);
+    const duration = Date.now() - startTime;
+    console.error(`[route] status check error after ${duration}ms:`, error);
+    
+    if (error instanceof Error && error.message === 'Status check timeout') {
+      return res.status(408).json({
+        error: 'Status check timed out',
+        jobId: req.params.jobId,
+        message: 'Service may be under heavy load'
+      });
+    }
+    
     res.status(500).json({ 
       error: 'Failed to get audit status',
-      message: error instanceof Error ? error.message : 'Unknown error'
+      message: error instanceof Error ? error.message : 'Unknown error',
+      jobId: req.params.jobId
     });
   }
 });
