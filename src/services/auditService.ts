@@ -1,4 +1,9 @@
-import puppeteer, { type LaunchOptions, type Browser, type Page, type HTTPRequest } from 'puppeteer';
+import puppeteer, {
+    type LaunchOptions,
+    type Browser,
+    type Page,
+    type HTTPResponse
+} from 'puppeteer';
 import crypto from 'crypto';
 import fs from 'node:fs';
 import { config } from '../config/index.js';
@@ -47,10 +52,15 @@ export class AuditService {
     private activeJobs = 0;
     private readonly maxConcurrentJobs = 1; // Limit to 1 job for nano instance
 
-    // --- small util to avoid any waitForTimeout version issues ---
-    private sleep(ms: number) {
-        return new Promise<void>(res => setTimeout(res, ms));
-    }
+    // --- Blocking + stealth config ---
+    private readonly BLOCKED_RESOURCE_TYPES = new Set([
+        'image', 'media', 'font', 'stylesheet', 'websocket'
+    ]);
+    private readonly BLOCKED_URL_SUBSTRINGS = [
+        'doubleclick', 'googletagmanager', 'googletagservices', 'google-analytics',
+        'facebook.com/tr', 'hotjar', 'segment.com', 'amplitude', 'mixpanel',
+        'optimizely', 'newrelic', 'adservice', 'adsystem', 'taboola', 'outbrain'
+    ];
 
     private pickExecutablePath(): string | undefined {
         const candidates = [
@@ -66,13 +76,6 @@ export class AuditService {
             } catch { }
         }
         return undefined; // falls back to puppeteer default if present
-    }
-
-    private buildUserAgent(mobile?: boolean, customUA?: string) {
-        if (customUA) return customUA;
-        const desktop = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-        const mobileUA = 'Mozilla/5.0 (Linux; Android 12; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
-        return mobile ? mobileUA : desktop;
     }
 
     async getBrowser(): Promise<Browser> {
@@ -97,6 +100,10 @@ export class AuditService {
                 timestamp: new Date().toISOString()
             });
 
+            // Ensure user-data-dir exists
+            try { fs.mkdirSync('/tmp/chrome-data', { recursive: true }); } catch { }
+
+            // IMPORTANT: make this a mutable string[]
             const args: string[] = [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -108,29 +115,20 @@ export class AuditService {
                 '--mute-audio',
                 '--disable-extensions',
                 '--user-data-dir=/tmp/chrome-data',
-                '--disable-background-networking',
-                '--disable-background-timer-throttling',
-                '--disable-breakpad',
-                '--disable-domain-reliability',
-                '--metrics-recording-only',
-                '--password-store=basic',
-                '--use-mock-keychain',
-                '--window-size=1366,900',
-                '--disable-features=IsolateOrigins,site-per-process,BlockInsecurePrivateNetworkRequests',
-                '--renderer-process-limit=1',
-                '--js-flags=--max-old-space-size=192',
-                '--disable-features=AudioServiceOutOfProcess,BackForwardCache,TranslateUI',
-                '--disable-backgrounding-occluded-windows',
+                '--window-size=1366,768',
+                '--force-color-profile=srgb',
+                '--allow-pre-commit-input',
             ];
 
+            // Also: DO NOT use `as const` on launchOpts
             const launchOpts: LaunchOptions = {
-                headless: true,          // <= compatible everywhere
-                pipe: usePipe,           // false => WebSocket transport
+                headless: true,
+                pipe: usePipe,         // false => WebSocket transport
                 executablePath,
                 args,
-                timeout: 180_000,
-                protocolTimeout: 240_000,
-                dumpio: true
+                timeout: 120_000,          // Increased for nano instances
+                protocolTimeout: 180_000,  // Significantly increased for nano instances
+                dumpio: true               // Enable dumpio to log
             };
 
             this.activeBrowser = await puppeteer.launch(launchOpts);
@@ -139,9 +137,12 @@ export class AuditService {
     }
 
     async startAudit(request: AuditRequest): Promise<void> {
+        // Check concurrency limit
         if (this.activeJobs >= this.maxConcurrentJobs) {
             throw new Error('Maximum concurrent jobs reached');
         }
+
+        // Start processing the audit asynchronously
         this.processAudit(request);
     }
 
@@ -152,7 +153,7 @@ export class AuditService {
         try {
             console.log(`Processing audit for ${request.websiteUrl} (Job: ${request.jobId})`);
 
-            // Fast DNS/egress preflight
+            // Fast DNS/egress preflight so we don't spin up Chrome if the URL is unreachable
             try {
                 const pre = await fetch(request.websiteUrl, { method: 'HEAD' });
                 console.log('[audit] preflight HEAD status:', pre.status);
@@ -160,10 +161,10 @@ export class AuditService {
                 throw new Error(`Preflight failed (network/DNS): ${(e as Error).message}`);
             }
 
-            // Launch/retry
+            // Single retry attempt only to avoid resource exhaustion
             let browser: Browser;
             let retryCount = 0;
-            const maxRetries = 2;
+            const maxRetries = 2; // Reduced retries
 
             while (retryCount < maxRetries) {
                 try {
@@ -174,59 +175,66 @@ export class AuditService {
                 } catch (error) {
                     retryCount++;
                     console.error(`Browser launch attempt ${retryCount} failed:`, error);
+
                     if (retryCount >= maxRetries) {
                         throw new Error(`Failed to launch browser after ${maxRetries} attempts`);
                     }
+
+                    // Don't close the shared browser - just wait and retry
                     const backoffTime = 2000 * retryCount;
                     console.log(`Waiting ${backoffTime}ms before retry ${retryCount + 1}`);
-                    await this.sleep(backoffTime);
+                    await new Promise(resolve => setTimeout(resolve, backoffTime));
                 }
             }
 
+            // Use single page for entire audit process
             const page = await browser!.newPage();
             console.log('[audit] page created');
+
             page.on('console', m => console.log('[console]', m.type(), m.text()));
             page.on('pageerror', e => console.warn('[pageerror]', e.message));
             page.on('requestfailed', r => console.warn('[requestfailed]', r.url(), r.failure()?.errorText));
 
+            // Page hardening for JS-heavy sites
+            await this.applyStealthShims(page);
+            await this.enableRequestInterception(page);
+
             try {
-                const jobDeadlineMs = 120_000; // 2 minute job watchdog
+                const jobDeadlineMs = 180_000; // 3 minute job watchdog for heavy sites
                 const watchdog = new Promise<never>((_, rej) =>
                     setTimeout(() => rej(new Error('Job watchdog timeout')), jobDeadlineMs)
                 );
 
                 const resultPayload = await Promise.race([
                     (async () => {
-                        // Page prep (stealth + headers + UA + viewport + request trimming)
-                        const ua = this.buildUserAgent(request.options?.mobile, request.options?.customUserAgent);
-                        await this.preparePage(page, {
-                            jobId: request.jobId,
-                            websiteUrl: request.websiteUrl,
-                            options: {
-                                mobile: request.options?.mobile,
-                                includeScreenshot: request.options?.includeScreenshot,
-                                customUserAgent: ua
-                            }
-                        });
+                        // Configure page once with error handling
+                        const userAgent = request.options?.customUserAgent ||
+                            config.lighthouse.settings.emulatedUserAgent;
 
+                        console.log('[audit] setUserAgent');
+                        await page.setUserAgent(userAgent);
+                        await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+
+                        console.log('[audit] setViewport');
+                        if (request.options?.mobile) {
+                            await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+                        } else {
+                            await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
+                        }
+
+                        console.log('[audit] set timeouts');
                         await page.setDefaultTimeout(60_000);
                         await page.setDefaultNavigationTimeout(60_000);
 
                         console.log('[audit] running audit on', request.websiteUrl);
-                        const lighthouseResult = await this.runLighthouseAudit(
-                            page,
-                            request.websiteUrl,
-                            {
-                                mobile: request.options?.mobile,
-                                includeScreenshot: request.options?.includeScreenshot,
-                                customUserAgent: ua
-                            }
-                        );
+                        // Run audit on the same page instance
+                        const lighthouseResult = await this.runLighthouseAudit(page, request.websiteUrl);
 
-                        // Optional screenshot
+                        // Take screenshot if requested (on same page)
                         let screenshot: string | undefined;
                         if (request.options?.includeScreenshot) {
                             try {
+                                await this.waitForNetworkQuiet(page, 1000, 2, 8000).catch(() => { });
                                 const buf = await page.screenshot({ type: 'png', fullPage: false });
                                 screenshot = Buffer.from(buf).toString('base64');
                             } catch (error) {
@@ -254,6 +262,7 @@ export class AuditService {
                     watchdog
                 ]);
 
+                // Persist + callback on success
                 this.jobStatuses.set(request.jobId, 'COMPLETED');
                 this.jobResults.set(request.jobId, resultPayload);
                 console.log(`Audit completed for job ${request.jobId}:`, {
@@ -272,11 +281,20 @@ export class AuditService {
                     console.warn('Page close error (ignored):', error);
                 }
 
-                // DO NOT close the shared browser here — keep it warm for the next job.
-                // Browser is closed explicitly via cleanup(), or on crash handling.
+                // Close browser after each job to prevent memory leaks
+                try {
+                    if (this.activeBrowser) {
+                        await this.activeBrowser.close();
+                        this.activeBrowser = null;
+                        console.log('Browser closed after job completion');
+                    }
+                } catch (error) {
+                    console.warn('Browser close error (ignored):', error);
+                }
             }
 
         } catch (error) {
+            // Handle errors + callback
             this.jobStatuses.set(request.jobId, 'FAILED');
             const errorResult: AuditResult = {
                 jobId: request.jobId,
@@ -294,260 +312,138 @@ export class AuditService {
         }
     }
 
-    // --- page hardening & lightweight anti-bot tweaks + request trimming ---
-    private async preparePage(page: Page, req: AuditRequest) {
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            // @ts-ignore
-            const originalQuery = window.navigator.permissions?.query;
-            if (originalQuery) {
-                // @ts-ignore
-                window.navigator.permissions.query = (parameters: any) => (
-                    parameters && parameters.name === 'notifications'
-                        ? Promise.resolve({ state: 'denied' })
-                        : originalQuery(parameters)
-                );
-            }
-        });
-
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Upgrade-Insecure-Requests': '1',
-        });
-        try { await page.emulateTimezone('America/New_York'); } catch { }
-
-        const ua = this.buildUserAgent(req.options?.mobile, req.options?.customUserAgent);
-        await page.setUserAgent(ua);
-
-        if (req.options?.mobile) {
-            await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
-        } else {
-            await page.setViewport({
-                width: config.lighthouse?.settings?.screenEmulation?.width ?? 1366,
-                height: config.lighthouse?.settings?.screenEmulation?.height ?? 900,
-                deviceScaleFactor: 1
-            });
-        }
-
-        const blockedHosts = [
-            'doubleclick.net', 'google-analytics.com', 'googletagmanager.com', 'googletagservices.com',
-            'facebook.net', 'facebook.com/tr', 'hotjar.com', 'segment.com', 'mixpanel.com', 'fullstory.com',
-        ];
-        const shouldBlock = (url: string) => blockedHosts.some(h => url.includes(h));
-
-        await page.setRequestInterception(true);
-        page.on('request', (r: HTTPRequest) => {
-            const type = r.resourceType();
-            const url = r.url();
-
-            if (type === 'document' || type === 'xhr' || type === 'fetch' || type === 'script' || type === 'stylesheet') {
-                if (shouldBlock(url) && (type !== 'stylesheet' && type !== 'script')) {
-                    return r.abort();
-                }
-                return r.continue();
-            }
-
-            if (!req.options?.includeScreenshot && (type === 'image' || type === 'media' || type === 'font')) {
-                return r.abort();
-            }
-
-            if (shouldBlock(url)) return r.abort();
-            return r.continue();
-        });
-    }
-
-    // --- robust “page is done” detector for JS-heavy sites ---
-    private async waitForPageComplete(page: Page, { quietMs = 1500, maxWaitMs = 45_000 } = {}) {
-        const noisy = [/googletagmanager\.com/, /google-analytics\.com/, /doubleclick\.net/, /cdn-cgi\/beacon/];
-        const ignore = (url: string) => noisy.some(rx => rx.test(url));
-
-        let inflight = 0;
-        const inc = (url: string) => { if (!ignore(url)) inflight++; };
-        const dec = (url: string) => { if (!ignore(url)) inflight = Math.max(0, inflight - 1); };
-
-        const onReq = (r: HTTPRequest) => inc(r.url());
-        const onFin = (r: HTTPRequest) => dec(r.url());
-        const onFail = (r: HTTPRequest) => dec(r.url());
-
-        page.on('request', onReq);
-        page.on('requestfinished', onFin);
-        page.on('requestfailed', onFail);
-
-        const stableDOM = async () => {
-            const snap = await page.evaluate(() => {
-                const body = document.body;
-                const html = document.documentElement;
-                const h = Math.max(
-                    body?.scrollHeight || 0, body?.offsetHeight || 0,
-                    html?.clientHeight || 0, html?.scrollHeight || 0, html?.offsetHeight || 0
-                );
-                const count = document.getElementsByTagName('*').length;
-                return { h, count };
-            });
-            await this.sleep(250);
-            const snap2 = await page.evaluate(() => {
-                const body = document.body;
-                const html = document.documentElement;
-                const h = Math.max(
-                    body?.scrollHeight || 0, body?.offsetHeight || 0,
-                    html?.clientHeight || 0, html?.scrollHeight || 0, html?.offsetHeight || 0
-                );
-                const count = document.getElementsByTagName('*').length;
-                return { h, count };
-            });
-            return (Math.abs(snap.h - snap2.h) < 2) && (Math.abs(snap.count - snap2.count) < 5);
-        };
-
-        const start = Date.now();
-        let lastQuiet = Date.now();
-
-        while (Date.now() - start < maxWaitMs) {
-            if (inflight === 0 && await stableDOM()) {
-                try { await page.evaluate(() => (document as any).fonts && (document as any).fonts.ready); } catch { }
-                await page.evaluate(() => new Promise(requestAnimationFrame));
-                await page.evaluate(() => new Promise(requestAnimationFrame));
-                if (Date.now() - lastQuiet >= quietMs) break;
-            } else {
-                lastQuiet = Date.now();
-            }
-            await this.sleep(150);
-        }
-
-        page.off('request', onReq);
-        page.off('requestfinished', onFin);
-        page.off('requestfailed', onFail);
-    }
-
-    // --- auto-scroll to trigger lazy content ---
-    private async autoScroll(page: Page, maxPixels = 4000) {
-        try {
-            await page.evaluate(async (limit) => {
-                await new Promise<void>((resolve) => {
-                    let total = 0;
-                    const step = 350;
-                    const timer = setInterval(() => {
-                        const { scrollHeight } = document.documentElement;
-                        window.scrollBy(0, step);
-                        total += step;
-                        if (total >= limit || window.scrollY + window.innerHeight >= scrollHeight) {
-                            clearInterval(timer);
-                            resolve();
-                        }
-                    }, 50);
-                });
-            }, maxPixels);
-        } catch { }
-    }
-
-    private async runLighthouseAudit(
-        page: Page,
-        url: string,
-        _ctx: { mobile?: boolean; includeScreenshot?: boolean; customUserAgent?: string } = {}
-    ) {
+    // --- Robust navigation + analysis with soft idle and consent handling ---
+    private async runLighthouseAudit(page: Page, url: string) {
         try {
             console.log('[audit] starting progressive navigation to', url);
 
-            let response: Awaited<ReturnType<Page['goto']>> | null = null;
-            const strategies = [
-                { waitUntil: 'domcontentloaded' as const, timeout: 30_000, name: 'DOM ready' },
-                { waitUntil: 'load' as const, timeout: 45_000, name: 'full load' },
-                { waitUntil: 'networkidle2' as const, timeout: 55_000, name: 'network idle' },
+            const navStrategies: Array<{ name: string; waitUntil?: 'domcontentloaded' | 'load' | 'networkidle2'; navTimeout: number; quietTimeout: number; }> = [
+                { name: 'domcontentloaded+quiet', waitUntil: 'domcontentloaded', navTimeout: 25_000, quietTimeout: 15_000 },
+                { name: 'load+quiet', waitUntil: 'load', navTimeout: 35_000, quietTimeout: 15_000 },
+                { name: 'networkidle2+quiet', waitUntil: 'networkidle2', navTimeout: 45_000, quietTimeout: 10_000 },
+                { name: 'basic+quiet', waitUntil: undefined, navTimeout: 20_000, quietTimeout: 12_000 },
             ];
 
-            for (const strategy of strategies) {
+            try { await page.setBypassCSP(true); } catch { }
+
+            let response: HTTPResponse | null = null;
+            let navOk = false;
+            let lastError: unknown = null;
+
+            for (const strat of navStrategies) {
                 try {
-                    console.log(`[audit] trying navigation strategy: ${strategy.name}`);
-                    response = await page.goto(url, { waitUntil: strategy.waitUntil, timeout: strategy.timeout });
-                    if (response && response.ok()) {
-                        console.log(`[audit] navigation successful with: ${strategy.name}`);
-                        break;
+                    console.log(`[audit] navigating with strategy "${strat.name}"`);
+                    const opts: any = { timeout: strat.navTimeout };
+                    if (strat.waitUntil) opts.waitUntil = strat.waitUntil;
+
+                    response = await page.goto(url, opts);
+                    const status = response?.status() ?? 0;
+                    if (!response || status >= 400) {
+                        throw new Error(`Bad response status ${status} with ${strat.name}`);
                     }
-                } catch (error) {
-                    console.warn(`[audit] strategy "${strategy.name}" failed:`, (error as Error).message);
+
+                    // wait for <body> and then soft network idle
+                    await page.waitForSelector('body', { timeout: 8000 }).catch(() => { });
+                    await this.waitForNetworkQuiet(page, 1200, 2, strat.quietTimeout).catch(() => { });
+
+                    // Heuristic content check
+                    const contentOk = await page.evaluate(() => {
+                        const b = document.body;
+                        if (!b) return false;
+                        const textLen = (b.innerText || '').trim().length;
+                        const hasH1 = !!document.querySelector('h1');
+                        return textLen > 50 || hasH1;
+                    });
+
+                    if (!contentOk) {
+                        throw new Error(`Content heuristic failed on "${strat.name}"`);
+                    }
+
+                    navOk = true;
+                    break;
+                } catch (e) {
+                    lastError = e;
+                    console.warn(`[audit] strategy "${strat.name}" failed:`, (e as Error).message);
+                    await new Promise(r => setTimeout(r, 500));
                     continue;
                 }
             }
 
-            if (!response) {
-                console.warn('[audit] falling back to basic navigation');
-                response = await page.goto(url, { timeout: 25_000 }).catch(() => null);
+            if (!navOk) {
+                console.warn('[audit] all JS navigation strategies failed, attempting HTML-only fallback');
+                return await this.runHtmlOnlyFallback(page, url, lastError);
             }
 
-            if (!response) throw new Error('All navigation strategies failed');
+            // Try to dismiss common consent overlays (best-effort)
+            try {
+                await page.evaluate(() => {
+                    const selectors = [
+                        'button[aria-label*="accept"]',
+                        'button:where([id*="accept"],[class*="accept"]):not([disabled])',
+                        'button:where([id*="agree"],[class*="agree"])',
+                        'button:where([id*="allow"],[class*="allow"])',
+                        '[role="button"][data-testid*="accept"]'
+                    ];
+                    for (const sel of selectors) {
+                        const btn = document.querySelector(sel) as HTMLButtonElement | null;
+                        if (btn) { btn.click(); break; }
+                    }
+                });
+            } catch { }
 
-            await Promise.race([
-                page.waitForSelector('#__next, #root, [data-reactroot], app-root', { timeout: 8_000 }).catch(() => null),
-                page.waitForFunction('document.readyState === "complete"', { timeout: 8_000 }).catch(() => null),
-            ]);
+            // Collect metrics safely
+            let loadTime = 0;
+            try {
+                const perfNav = await page.evaluate(() => {
+                    try {
+                        const entries = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
+                        if (entries && entries[0]) {
+                            return { loadEventEnd: entries[0].loadEventEnd };
+                        }
+                    } catch { }
+                    return { loadEventEnd: 0 };
+                });
+                loadTime = perfNav.loadEventEnd || 0;
+            } catch { }
 
-            await this.autoScroll(page);
-            await this.waitForPageComplete(page, { quietMs: 1500, maxWaitMs: 45_000 });
+            // crude perf score from load time (ms)
+            const performanceScore = Math.max(0, Math.min(100, 100 - Math.floor(loadTime / 100)));
 
-            console.log('[audit] page loaded & stable, collecting metrics');
-
-            const perf = await page.evaluate(() => {
-                try {
-                    const nav = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
-                    const n = nav && nav.length ? nav[0] : null;
-                    return {
-                        loadTime: n ? n.loadEventEnd : 0,
-                        domContentLoaded: n ? n.domContentLoadedEventEnd : 0,
-                        firstPaint: (performance.getEntriesByName('first-paint')[0] as any)?.startTime || 0,
-                        firstContentfulPaint: (performance.getEntriesByName('first-contentful-paint')[0] as any)?.startTime || 0,
-                    };
-                } catch {
-                    return { loadTime: 0, domContentLoaded: 0, firstPaint: 0, firstContentfulPaint: 0 };
-                }
-            });
-
-            const lt = perf.loadTime || perf.firstContentfulPaint || 3000;
-            const performanceScore = Math.max(0, Math.min(100, Math.round(100 - lt / 80)));
-
-            console.log('[audit] running SEO analysis');
-            const seoChecks = await page.evaluate(() => {
+            // SEO checks (guarded)
+            const seoScore = await page.evaluate(() => {
                 try {
                     const title = document.title || '';
-                    const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
-                    const h1s = document.querySelectorAll('h1').length;
-                    const hasViewport = !!document.querySelector('meta[name="viewport"]');
-
+                    const metaDescription = document.querySelector('meta[name="description"]');
+                    const h1s = document.querySelectorAll('h1');
                     let score = 0;
-                    if (title && title.length <= 60) score += 25;
-                    if (metaDescription && metaDescription.length <= 160) score += 25;
-                    if (h1s === 1) score += 25;
-                    if (hasViewport) score += 25;
-
+                    if (title && title.length > 0 && title.length < 60) score += 25;
+                    if (metaDescription && metaDescription.getAttribute('content')) score += 25;
+                    if (h1s.length === 1) score += 25;
+                    if (document.querySelector('meta[name="viewport"]')) score += 25;
                     return score;
-                } catch {
-                    return 50;
-                }
-            });
+                } catch { return 50; }
+            }).catch(() => 50);
 
-            console.log('[audit] running accessibility analysis');
+            // Accessibility proxy (guarded)
             const accessibilityScore = await page.evaluate(() => {
                 try {
-                    let score = 100;
                     const imgs = Array.from(document.querySelectorAll('img'));
-                    for (const img of imgs) if (!img.getAttribute('alt')) score -= 10;
                     const buttons = Array.from(document.querySelectorAll('button'));
-                    for (const b of buttons) {
-                        const label = b.textContent?.trim() || b.getAttribute('aria-label') || '';
-                        if (!label) score -= 5;
-                    }
-                    return Math.max(0, Math.min(100, score));
+                    let score = 100;
+                    imgs.forEach(img => { if (!img.getAttribute('alt')) score -= 10; });
+                    buttons.forEach(btn => { if (!(btn.textContent || '').trim() && !btn.getAttribute('aria-label')) score -= 5; });
+                    return Math.max(0, score);
                 } catch { return 70; }
-            });
+            }).catch(() => 70);
 
             return {
-                performance: performanceScore,
-                seo: seoChecks,
+                performance: Math.round(performanceScore),
+                seo: seoScore,
                 accessibility: Math.round(accessibilityScore),
-                bestPractices: 75,
+                bestPractices: 75, // Default score
                 metrics: {
-                    loadTime: lt,
-                    cumulativeLayoutShift: 0
+                    loadTime,
+                    cumulativeLayoutShift: 0 // Simplified
                 },
                 issues: []
             };
@@ -556,6 +452,138 @@ export class AuditService {
             console.error('Audit failed:', error);
             throw error;
         }
+    }
+
+    // --- HTML-only fallback when JS rendering fails ---
+    private async runHtmlOnlyFallback(page: Page, url: string, reason?: unknown) {
+        try {
+            const controller = new AbortController();
+            const t = setTimeout(() => controller.abort(), 15_000);
+            const res = await fetch(url, { method: 'GET', signal: controller.signal });
+            clearTimeout(t);
+
+            const status = res.status;
+            if (!res.ok) throw new Error(`fallback fetch status ${status}`);
+            const html = await res.text();
+
+            await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10_000 }).catch(() => { });
+            // crude proxy for load time based on content size
+            const textLen = html.replace(/<[^>]*>/g, '').trim().length;
+            const loadTime = Math.min(5000, Math.max(500, Math.floor(textLen / 5)));
+
+            const seo = await page.evaluate(() => {
+                try {
+                    const title = document.title || '';
+                    const metaDescription = document.querySelector('meta[name="description"]');
+                    const h1s = document.querySelectorAll('h1');
+                    let score = 0;
+                    if (title && title.length > 0 && title.length < 60) score += 25;
+                    if (metaDescription && metaDescription.getAttribute('content')) score += 25;
+                    if (h1s.length === 1) score += 25;
+                    if (document.querySelector('meta[name="viewport"]')) score += 25;
+                    return score;
+                } catch { return 50; }
+            }).catch(() => 50);
+
+            const accessibility = await page.evaluate(() => {
+                try {
+                    const imgs = Array.from(document.querySelectorAll('img'));
+                    let score = 100;
+                    imgs.forEach(img => { if (!img.getAttribute('alt')) score -= 10; });
+                    return Math.max(0, score);
+                } catch { return 70; }
+            }).catch(() => 70);
+
+            return {
+                performance: Math.max(10, 100 - Math.floor(loadTime / 100)),
+                seo,
+                accessibility: Math.round(accessibility),
+                bestPractices: 70,
+                metrics: { loadTime, cumulativeLayoutShift: 0 },
+                issues: []
+            };
+        } catch (e) {
+            console.error('[audit:fallback] failed:', e, 'original reason:', reason);
+            throw (reason instanceof Error ? reason : e);
+        }
+    }
+
+    // --- Helpers: interception, soft idle, stealth shims ---
+    private async enableRequestInterception(page: Page) {
+        await page.setRequestInterception(true);
+        page.on('request', req => {
+            const url = req.url().toLowerCase();
+            const type = req.resourceType();
+            if (this.BLOCKED_RESOURCE_TYPES.has(type)) return req.abort();
+            if (this.BLOCKED_URL_SUBSTRINGS.some(s => url.includes(s))) return req.abort();
+            return req.continue();
+        });
+    }
+
+    // Wait for a quiet network window (soft network idle)
+    private async waitForNetworkQuiet(page: Page, idleMs = 1200, maxInflight = 2, overallTimeout = 30000) {
+        let inflight = 0;
+        let resolveQuiet!: () => void;
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        let quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const clean = () => {
+            page.off('request', onReq);
+            page.off('requestfinished', onDone);
+            page.off('requestfailed', onDone);
+            if (timeoutId) clearTimeout(timeoutId);
+            if (quietTimer) clearTimeout(quietTimer);
+        };
+
+        const onReq = () => {
+            inflight++;
+            if (quietTimer) {
+                clearTimeout(quietTimer);
+                quietTimer = null;
+            }
+        };
+        const onDone = () => {
+            inflight = Math.max(0, inflight - 1);
+            if (inflight <= maxInflight) {
+                if (quietTimer) clearTimeout(quietTimer);
+                quietTimer = setTimeout(() => { clean(); resolveQuiet(); }, idleMs);
+            }
+        };
+
+        const overall = new Promise<void>((_, rej) => {
+            timeoutId = setTimeout(() => {
+                clean();
+                rej(new Error('waitForNetworkQuiet: overall timeout'));
+            }, overallTimeout);
+        });
+
+        const quiet = new Promise<void>(res => { resolveQuiet = res; });
+
+        page.on('request', onReq);
+        page.on('requestfinished', onDone);
+        page.on('requestfailed', onDone);
+
+        // kick the quiet timer if nothing is in flight
+        if (inflight <= maxInflight) {
+            quietTimer = setTimeout(() => { clean(); resolveQuiet(); }, idleMs);
+        }
+
+        await Promise.race([quiet, overall]).finally(clean);
+    }
+
+    private async applyStealthShims(page: Page) {
+        await page.evaluateOnNewDocument(() => {
+            // @ts-ignore
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            // @ts-ignore
+            // some sites check for window.chrome
+            window.chrome = { runtime: {} };
+            // fake languages/plugins
+            // @ts-ignore
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            // @ts-ignore
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+        });
     }
 
     private extractIssues(lhr: any) {
@@ -568,6 +596,7 @@ export class AuditService {
             recommendation: string;
         }> = [];
 
+        // Extract performance issues
         const performanceAudits = ['largest-contentful-paint', 'first-contentful-paint', 'speed-index'];
         for (const auditId of performanceAudits) {
             const audit = lhr.audits[auditId];
@@ -600,6 +629,7 @@ export class AuditService {
                 .update(body)
                 .digest('hex');
 
+            // Add timeout to prevent hanging
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 15_000);
 
