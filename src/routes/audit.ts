@@ -15,7 +15,8 @@ const auditRequestSchema = z.object({
   options: z.object({
     mobile: z.boolean().optional().default(false),
     desktop: z.boolean().optional().default(true),
-    screenshot: z.boolean().optional().default(true)
+    screenshot: z.boolean().optional().default(true),
+    includePageSpeedInsights: z.boolean().optional().default(false)
   }).optional().default({})
 });
 
@@ -38,6 +39,15 @@ const callbackSchema = z.object({
     metrics: z.object({
       loadTime: z.number().optional(),
       cumulativeLayoutShift: z.number().optional()
+    }).optional(),
+    pageSpeedMetrics: z.object({
+      performanceScore: z.number().optional(),
+      firstContentfulPaint: z.number().optional(),
+      largestContentfulPaint: z.number().optional(),
+      firstInputDelay: z.number().optional(),
+      cumulativeLayoutShift: z.number().optional(),
+      speedIndex: z.number().optional(),
+      totalBlockingTime: z.number().optional()
     }).optional(),
     pagesCrawled: z.number().optional(),
     screenshot: z.string().optional() // base64 encoded
@@ -74,7 +84,8 @@ router.post('/start', async (req: Request, res: Response) => {
       options: {
         mobile: validatedData.options?.mobile,
         customUserAgent: undefined,
-        includeScreenshot: validatedData.options?.screenshot
+        includeScreenshot: validatedData.options?.screenshot,
+        includePageSpeedInsights: validatedData.options?.includePageSpeedInsights
       }
     }).catch((error: Error) => {
       console.error(`[route] audit failed for job ${jobId}:`, error);

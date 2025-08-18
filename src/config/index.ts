@@ -12,6 +12,9 @@ export const config = {
   // Callback
   callbackUrl: process.env.CALLBACK_URL || 'http://localhost:3000/api/audits/callback',
   
+  // PageSpeed Insights API
+  pageSpeedApiKey: process.env.PAGESPEED_API_KEY || '',
+  
   // Chrome/Puppeteer
   chromeExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH || '/usr/bin/google-chrome',
   puppeteerSkipDownload: process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD === 'true',
