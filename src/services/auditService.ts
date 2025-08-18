@@ -348,19 +348,113 @@ export class AuditService {
         try {
           const images = Array.from(document.querySelectorAll('img'));
           const buttons = Array.from(document.querySelectorAll('button'));
-          let score = 100;
-          for (const img of images) {
-            if (!img.getAttribute('alt')) score -= 10;
+          const links = Array.from(document.querySelectorAll('a'));
+          const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+          const forms = Array.from(document.querySelectorAll('form'));
+          const inputs = Array.from(document.querySelectorAll('input, textarea, select'));
+          
+          let score = 0;
+          let totalChecks = 0;
+          
+          // Image alt text check (25% weight)
+          if (images.length > 0) {
+            let imagesWithAlt = 0;
+            for (const img of images) {
+              if (img.getAttribute('alt') !== null) {
+                imagesWithAlt++;
+              }
+            }
+            score += (imagesWithAlt / images.length) * 25;
+            totalChecks++;
           }
-          for (const btn of buttons) {
-            const hasText = !!btn.textContent?.trim();
-            const hasLabel = !!btn.getAttribute('aria-label');
-            if (!hasText && !hasLabel) score -= 5;
+          
+          // Button accessibility check (20% weight)
+          if (buttons.length > 0) {
+            let accessibleButtons = 0;
+            for (const btn of buttons) {
+              const hasText = !!btn.textContent?.trim();
+              const hasLabel = !!btn.getAttribute('aria-label');
+              const hasAriaLabelledBy = !!btn.getAttribute('aria-labelledby');
+              if (hasText || hasLabel || hasAriaLabelledBy) {
+                accessibleButtons++;
+              }
+            }
+            score += (accessibleButtons / buttons.length) * 20;
+            totalChecks++;
           }
-          return Math.max(0, score);
-        } catch { return 70; }
+          
+          // Link accessibility check (15% weight)
+          if (links.length > 0) {
+            let accessibleLinks = 0;
+            for (const link of links) {
+              const hasText = !!link.textContent?.trim();
+              const hasLabel = !!link.getAttribute('aria-label');
+              const hasTitle = !!link.getAttribute('title');
+              if (hasText || hasLabel || hasTitle) {
+                accessibleLinks++;
+              }
+            }
+            score += (accessibleLinks / links.length) * 15;
+            totalChecks++;
+          }
+          
+          // Form input labels check (20% weight)
+          if (inputs.length > 0) {
+            let labeledInputs = 0;
+            for (const input of inputs) {
+              const hasLabel = !!document.querySelector(`label[for="${input.id}"]`);
+              const hasAriaLabel = !!input.getAttribute('aria-label');
+              const hasAriaLabelledBy = !!input.getAttribute('aria-labelledby');
+              const hasPlaceholder = !!input.getAttribute('placeholder');
+              if (hasLabel || hasAriaLabel || hasAriaLabelledBy || hasPlaceholder) {
+                labeledInputs++;
+              }
+            }
+            score += (labeledInputs / inputs.length) * 20;
+            totalChecks++;
+          }
+          
+          // Basic page structure checks (20% weight)
+          let structureScore = 0;
+          
+          // Check for proper heading hierarchy
+          if (headings.length > 0) {
+            const h1s = document.querySelectorAll('h1');
+            if (h1s.length === 1) structureScore += 5; // Single H1 is good
+            else if (h1s.length > 1) structureScore += 2; // Multiple H1s not ideal but not terrible
+            
+            if (headings.length > 1) structureScore += 5; // Has heading structure
+          }
+          
+          // Check for skip links
+          const skipLinks = document.querySelectorAll('a[href^="#"]');
+          if (skipLinks.length > 0) structureScore += 3;
+          
+          // Check for landmark elements
+          const landmarks = document.querySelectorAll('main, nav, header, footer, section, article, aside');
+          if (landmarks.length > 0) structureScore += 5;
+          
+          // Check for lang attribute
+          if (document.documentElement.getAttribute('lang')) structureScore += 2;
+          
+          score += structureScore;
+          totalChecks++;
+          
+          // If we have no elements to check, return a baseline score
+          if (totalChecks === 0) {
+            return 60; // Neutral score when no interactive elements found
+          }
+          
+          return Math.round(Math.max(0, Math.min(100, score)));
+        } catch (error) {
+          console.error('Accessibility evaluation error:', error);
+          return 50; // Fallback score
+        }
       })
-      .catch(() => 70);
+      .catch((error) => {
+        console.error('Accessibility evaluation failed:', error);
+        return 50;
+      });
 
     // Optional screenshot
     let screenshot: string | undefined;
@@ -377,7 +471,7 @@ export class AuditService {
     const results = {
       performanceScore,
       seoScore,
-      accessibilityScore: Math.round(accessibilityScore),
+      accessibilityScore,
       bestPracticesScore: 75,
       metrics: {
         loadTime,

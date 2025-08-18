@@ -7,20 +7,20 @@ function generateSignature(body, secret) {
     return crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
-async function testFastSite() {
-    // Use a very simple, fast-loading site
+async function testMuchesko() {
+    // Test with muchesko.com
     const requestBody = {
-        url: 'https://react.dev', // Simple static site
+        url: 'https://muchesko.com',
         options: {
             mobile: false,
-            screenshot: false
+            screenshot: true // Let's get a screenshot too
         }
     };
 
     const body = JSON.stringify(requestBody);
     const signature = generateSignature(body, API_SECRET_KEY);
 
-    console.log('🚀 Testing with ultra-fast site (httpbin.org)...');
+    console.log('🚀 Testing muchesko.com...');
     console.log('📱 URL:', requestBody.url);
 
     try {
@@ -44,8 +44,8 @@ async function testFastSite() {
         if (result.jobId) {
             console.log(`⏳ Waiting for audit completion (Job ID: ${result.jobId})...`);
             
-            // Poll for completion with longer timeout
-            for (let i = 0; i < 30; i++) { // 3 minutes max
+            // Poll for completion 
+            for (let i = 0; i < 25; i++) { // 2.5 minutes max
                 await new Promise(resolve => setTimeout(resolve, 6000)); // Wait 6 seconds
 
                 try {
@@ -57,11 +57,42 @@ async function testFastSite() {
 
                     if (statusResponse.ok) {
                         const statusData = await statusResponse.json();
-                        console.log(`📊 Status check ${i + 1}:`, statusData);
+                        console.log(`📊 Status check ${i + 1}:`, {
+                            status: statusData.status,
+                            timestamp: statusData.timestamp,
+                            ...(statusData.results && {
+                                performance: statusData.results.performanceScore,
+                                seo: statusData.results.seoScore,
+                                accessibility: statusData.results.accessibilityScore,
+                                bestPractices: statusData.results.bestPracticesScore,
+                                loadTime: statusData.results.metrics?.loadTime
+                            })
+                        });
 
                         if (statusData.status === 'COMPLETED') {
                             console.log('🎉 Audit completed successfully!');
-                            console.log('📈 Full Results:', JSON.stringify(statusData, null, 2));
+                            console.log('\n📈 FINAL RESULTS:');
+                            console.log('==================');
+                            console.log(`🚀 Performance Score: ${statusData.results.performanceScore}/100`);
+                            console.log(`🔍 SEO Score: ${statusData.results.seoScore}/100`);
+                            console.log(`♿ Accessibility Score: ${statusData.results.accessibilityScore}/100`);
+                            console.log(`✅ Best Practices Score: ${statusData.results.bestPracticesScore}/100`);
+                            console.log(`⏱️  Load Time: ${statusData.results.metrics?.loadTime}ms`);
+                            console.log(`📄 Pages Crawled: ${statusData.results.pagesCrawled}`);
+                            
+                            if (statusData.results.screenshot) {
+                                console.log('📸 Screenshot captured successfully');
+                            }
+                            
+                            if (statusData.results.issues && statusData.results.issues.length > 0) {
+                                console.log('\n⚠️  Issues found:', statusData.results.issues.length);
+                                statusData.results.issues.forEach((issue, idx) => {
+                                    console.log(`  ${idx + 1}. [${issue.type}] ${issue.title}`);
+                                });
+                            } else {
+                                console.log('\n✨ No issues found!');
+                            }
+                            
                             return;
                         } else if (statusData.status === 'FAILED') {
                             console.log('❌ Audit failed:', statusData.error);
@@ -83,4 +114,4 @@ async function testFastSite() {
     }
 }
 
-testFastSite();
+testMuchesko();

@@ -7,10 +7,10 @@ function generateSignature(body, secret) {
     return crypto.createHmac('sha256', secret).update(body).digest('hex');
 }
 
-async function testFastSite() {
-    // Use a very simple, fast-loading site
+async function testSimpleSite() {
+    // Test with a very simple, fast site first
     const requestBody = {
-        url: 'https://react.dev', // Simple static site
+        url: 'https://example.com', // Very simple static site
         options: {
             mobile: false,
             screenshot: false
@@ -20,7 +20,7 @@ async function testFastSite() {
     const body = JSON.stringify(requestBody);
     const signature = generateSignature(body, API_SECRET_KEY);
 
-    console.log('🚀 Testing with ultra-fast site (httpbin.org)...');
+    console.log('🚀 Testing with simple site (example.com)...');
     console.log('📱 URL:', requestBody.url);
 
     try {
@@ -44,8 +44,8 @@ async function testFastSite() {
         if (result.jobId) {
             console.log(`⏳ Waiting for audit completion (Job ID: ${result.jobId})...`);
             
-            // Poll for completion with longer timeout
-            for (let i = 0; i < 30; i++) { // 3 minutes max
+            // Poll for completion 
+            for (let i = 0; i < 20; i++) { // 2 minutes max for simple site
                 await new Promise(resolve => setTimeout(resolve, 6000)); // Wait 6 seconds
 
                 try {
@@ -83,4 +83,4 @@ async function testFastSite() {
     }
 }
 
-testFastSite();
+testSimpleSite();
