@@ -36,13 +36,24 @@ export interface AuditResult {
       cumulativeLayoutShift?: number;
     };
     pageSpeedMetrics?: {
-      performanceScore?: number;
-      firstContentfulPaint?: number;
-      largestContentfulPaint?: number;
-      firstInputDelay?: number;
-      cumulativeLayoutShift?: number;
-      speedIndex?: number;
-      totalBlockingTime?: number;
+      desktop?: {
+        performanceScore?: number;
+        firstContentfulPaint?: number;
+        largestContentfulPaint?: number;
+        firstInputDelay?: number;
+        cumulativeLayoutShift?: number;
+        speedIndex?: number;
+        totalBlockingTime?: number;
+      };
+      mobile?: {
+        performanceScore?: number;
+        firstContentfulPaint?: number;
+        largestContentfulPaint?: number;
+        firstInputDelay?: number;
+        cumulativeLayoutShift?: number;
+        speedIndex?: number;
+        totalBlockingTime?: number;
+      };
     };
     // Detailed breakdown for each category
     categoryDetails?: {
@@ -203,13 +214,24 @@ export class AuditService {
   // ---------- PageSpeed Insights API ----------
 
   private async getPageSpeedInsights(url: string): Promise<{
-    performanceScore: number;
-    firstContentfulPaint: number;
-    largestContentfulPaint: number;
-    firstInputDelay: number;
-    cumulativeLayoutShift: number;
-    speedIndex: number;
-    totalBlockingTime: number;
+    desktop: {
+      performanceScore: number;
+      firstContentfulPaint: number;
+      largestContentfulPaint: number;
+      firstInputDelay: number;
+      cumulativeLayoutShift: number;
+      speedIndex: number;
+      totalBlockingTime: number;
+    };
+    mobile: {
+      performanceScore: number;
+      firstContentfulPaint: number;
+      largestContentfulPaint: number;
+      firstInputDelay: number;
+      cumulativeLayoutShift: number;
+      speedIndex: number;
+      totalBlockingTime: number;
+    };
   } | null> {
     if (!config.pageSpeedApiKey) {
       console.warn('[pagespeed] No API key configured, skipping PageSpeed Insights');
@@ -219,10 +241,44 @@ export class AuditService {
     try {
       console.log('[pagespeed] Calling PageSpeed Insights API for:', url);
       
+      // Fetch both desktop and mobile scores in parallel
+      const [desktopResponse, mobileResponse] = await Promise.all([
+        this.fetchPageSpeedStrategy(url, 'desktop'),
+        this.fetchPageSpeedStrategy(url, 'mobile')
+      ]);
+
+      if (!desktopResponse || !mobileResponse) {
+        console.error('[pagespeed] Failed to fetch both desktop and mobile metrics');
+        return null;
+      }
+
+      console.log('[pagespeed] Successfully retrieved both desktop and mobile metrics');
+
+      return {
+        desktop: desktopResponse,
+        mobile: mobileResponse
+      };
+
+    } catch (error) {
+      console.error('[pagespeed] Error calling PageSpeed Insights:', (error as Error).message);
+      return null;
+    }
+  }
+
+  private async fetchPageSpeedStrategy(url: string, strategy: 'desktop' | 'mobile'): Promise<{
+    performanceScore: number;
+    firstContentfulPaint: number;
+    largestContentfulPaint: number;
+    firstInputDelay: number;
+    cumulativeLayoutShift: number;
+    speedIndex: number;
+    totalBlockingTime: number;
+  } | null> {
+    try {
       const apiUrl = new URL('https://www.googleapis.com/pagespeedonline/v5/runPagespeed');
       apiUrl.searchParams.set('url', url);
       apiUrl.searchParams.set('key', config.pageSpeedApiKey);
-      apiUrl.searchParams.set('strategy', 'desktop');
+      apiUrl.searchParams.set('strategy', strategy);
       apiUrl.searchParams.set('category', 'performance');
 
       const controller = new AbortController();
@@ -238,9 +294,9 @@ export class AuditService {
       clearTimeout(timeout);
 
       if (!response.ok) {
-        console.error('[pagespeed] API error:', response.status, response.statusText);
+        console.error(`[pagespeed] ${strategy} API error:`, response.status, response.statusText);
         const errorText = await response.text().catch(() => '');
-        console.error('[pagespeed] Error details:', errorText);
+        console.error(`[pagespeed] ${strategy} error details:`, errorText);
         return null;
       }
 
@@ -249,7 +305,7 @@ export class AuditService {
       // Extract performance metrics from PageSpeed Insights response
       const lighthouseResult = data.lighthouseResult;
       if (!lighthouseResult) {
-        console.error('[pagespeed] No lighthouse result in response');
+        console.error(`[pagespeed] No lighthouse result in ${strategy} response`);
         return null;
       }
 
@@ -266,7 +322,7 @@ export class AuditService {
       const speedIndex = audits?.['speed-index']?.numericValue || 0;
       const totalBlockingTime = audits?.['total-blocking-time']?.numericValue || 0;
 
-      console.log('[pagespeed] Successfully retrieved metrics:', {
+      console.log(`[pagespeed] Successfully retrieved ${strategy} metrics:`, {
         performanceScore,
         firstContentfulPaint: Math.round(firstContentfulPaint),
         largestContentfulPaint: Math.round(largestContentfulPaint),
@@ -288,9 +344,9 @@ export class AuditService {
 
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        console.error('[pagespeed] Request timeout');
+        console.error(`[pagespeed] ${strategy} request timeout`);
       } else {
-        console.error('[pagespeed] Error calling PageSpeed Insights:', (error as Error).message);
+        console.error(`[pagespeed] Error calling ${strategy} PageSpeed Insights:`, (error as Error).message);
       }
       return null;
     }
@@ -475,7 +531,8 @@ export class AuditService {
       const pageSpeedData = await this.getPageSpeedInsights(request.websiteUrl);
       if (pageSpeedData) {
         pageSpeedMetrics = pageSpeedData;
-        performanceScore = pageSpeedData.performanceScore;
+        // Use desktop performance score as primary score, but could be configurable
+        performanceScore = pageSpeedData.desktop.performanceScore;
       } else {
         // Fallback to basic performance scoring if PageSpeed fails
         performanceScore = Math.max(0, Math.min(100, 100 - Math.floor(loadTime / 100)));
@@ -824,7 +881,7 @@ export class AuditService {
       bestPracticesScore: 75,
       metrics: {
         loadTime,
-        cumulativeLayoutShift: pageSpeedMetrics?.cumulativeLayoutShift || 0,
+        cumulativeLayoutShift: pageSpeedMetrics?.desktop?.cumulativeLayoutShift || 0,
       },
       ...(pageSpeedMetrics && { pageSpeedMetrics }),
       categoryDetails: {
@@ -839,28 +896,64 @@ export class AuditService {
             },
             ...(pageSpeedMetrics ? [
               {
-                title: 'First Contentful Paint',
-                value: `${pageSpeedMetrics.firstContentfulPaint || 0}ms`,
-                status: (pageSpeedMetrics.firstContentfulPaint || 0) < 1800 ? 'PASS' : (pageSpeedMetrics.firstContentfulPaint || 0) < 3000 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
-                description: 'Time until first content appears'
+                title: 'Desktop Performance Score',
+                value: `${pageSpeedMetrics.desktop?.performanceScore || 0}`,
+                status: (pageSpeedMetrics.desktop?.performanceScore || 0) >= 90 ? 'PASS' : (pageSpeedMetrics.desktop?.performanceScore || 0) >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Google PageSpeed Insights desktop performance score'
               },
               {
-                title: 'Largest Contentful Paint',
-                value: `${pageSpeedMetrics.largestContentfulPaint || 0}ms`,
-                status: (pageSpeedMetrics.largestContentfulPaint || 0) < 2500 ? 'PASS' : (pageSpeedMetrics.largestContentfulPaint || 0) < 4000 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
-                description: 'Time until largest content element appears'
+                title: 'Mobile Performance Score',
+                value: `${pageSpeedMetrics.mobile?.performanceScore || 0}`,
+                status: (pageSpeedMetrics.mobile?.performanceScore || 0) >= 90 ? 'PASS' : (pageSpeedMetrics.mobile?.performanceScore || 0) >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Google PageSpeed Insights mobile performance score'
               },
               {
-                title: 'Cumulative Layout Shift',
-                value: (pageSpeedMetrics.cumulativeLayoutShift || 0).toString(),
-                status: (pageSpeedMetrics.cumulativeLayoutShift || 0) < 0.1 ? 'PASS' : (pageSpeedMetrics.cumulativeLayoutShift || 0) < 0.25 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
-                description: 'Measures visual stability during page load'
+                title: 'First Contentful Paint (Desktop)',
+                value: `${pageSpeedMetrics.desktop?.firstContentfulPaint || 0}ms`,
+                status: (pageSpeedMetrics.desktop?.firstContentfulPaint || 0) < 1800 ? 'PASS' : (pageSpeedMetrics.desktop?.firstContentfulPaint || 0) < 3000 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Time until first content appears on desktop'
               },
               {
-                title: 'Speed Index',
-                value: `${pageSpeedMetrics.speedIndex || 0}ms`,
-                status: (pageSpeedMetrics.speedIndex || 0) < 3400 ? 'PASS' : (pageSpeedMetrics.speedIndex || 0) < 5800 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
-                description: 'How quickly page contents are visually populated'
+                title: 'First Contentful Paint (Mobile)',
+                value: `${pageSpeedMetrics.mobile?.firstContentfulPaint || 0}ms`,
+                status: (pageSpeedMetrics.mobile?.firstContentfulPaint || 0) < 1800 ? 'PASS' : (pageSpeedMetrics.mobile?.firstContentfulPaint || 0) < 3000 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Time until first content appears on mobile'
+              },
+              {
+                title: 'Largest Contentful Paint (Desktop)',
+                value: `${pageSpeedMetrics.desktop?.largestContentfulPaint || 0}ms`,
+                status: (pageSpeedMetrics.desktop?.largestContentfulPaint || 0) < 2500 ? 'PASS' : (pageSpeedMetrics.desktop?.largestContentfulPaint || 0) < 4000 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Time until largest content element appears on desktop'
+              },
+              {
+                title: 'Largest Contentful Paint (Mobile)',
+                value: `${pageSpeedMetrics.mobile?.largestContentfulPaint || 0}ms`,
+                status: (pageSpeedMetrics.mobile?.largestContentfulPaint || 0) < 2500 ? 'PASS' : (pageSpeedMetrics.mobile?.largestContentfulPaint || 0) < 4000 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Time until largest content element appears on mobile'
+              },
+              {
+                title: 'Cumulative Layout Shift (Desktop)',
+                value: (pageSpeedMetrics.desktop?.cumulativeLayoutShift || 0).toString(),
+                status: (pageSpeedMetrics.desktop?.cumulativeLayoutShift || 0) < 0.1 ? 'PASS' : (pageSpeedMetrics.desktop?.cumulativeLayoutShift || 0) < 0.25 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Measures visual stability during page load on desktop'
+              },
+              {
+                title: 'Cumulative Layout Shift (Mobile)',
+                value: (pageSpeedMetrics.mobile?.cumulativeLayoutShift || 0).toString(),
+                status: (pageSpeedMetrics.mobile?.cumulativeLayoutShift || 0) < 0.1 ? 'PASS' : (pageSpeedMetrics.mobile?.cumulativeLayoutShift || 0) < 0.25 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Measures visual stability during page load on mobile'
+              },
+              {
+                title: 'Speed Index (Desktop)',
+                value: `${pageSpeedMetrics.desktop?.speedIndex || 0}ms`,
+                status: (pageSpeedMetrics.desktop?.speedIndex || 0) < 3400 ? 'PASS' : (pageSpeedMetrics.desktop?.speedIndex || 0) < 5800 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'How quickly page contents are visually populated on desktop'
+              },
+              {
+                title: 'Speed Index (Mobile)',
+                value: `${pageSpeedMetrics.mobile?.speedIndex || 0}ms`,
+                status: (pageSpeedMetrics.mobile?.speedIndex || 0) < 3400 ? 'PASS' : (pageSpeedMetrics.mobile?.speedIndex || 0) < 5800 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'How quickly page contents are visually populated on mobile'
               }
             ] : [])
           ]
