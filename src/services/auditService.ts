@@ -80,9 +80,8 @@ export class AuditService {
       '--disable-extensions',
       '--user-data-dir=/tmp/chrome-data',
 
-      // keep Chrome lean + prevent CodeRange OOM
+      // keep Chrome lean but allow JIT compilation with more RAM
       '--renderer-process-limit=1',
-      '--js-flags=--jitless',
 
       // trim background work a bit more
       '--disable-background-networking',
@@ -193,7 +192,7 @@ export class AuditService {
 
       // Job-level watchdog so we never hang forever
       const jobWatchdog = new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error('Job watchdog timeout')), 90_000) // Reduced to 90 seconds
+        setTimeout(() => rej(new Error('Job watchdog timeout')), 150_000) // Increased to 2.5 minutes with more RAM
       );
 
       const result = await Promise.race([
@@ -276,25 +275,33 @@ export class AuditService {
     }
 
     console.log('[audit] set timeouts');
-    page.setDefaultTimeout(45_000); // Further reduced
-    page.setDefaultNavigationTimeout(45_000);
+    page.setDefaultTimeout(75_000); // Increased with more RAM
+    page.setDefaultNavigationTimeout(75_000);
 
     console.log('[audit] navigating', request.websiteUrl);
     const response = await this.progressiveGoto(page, request.websiteUrl);
     console.log('[audit] navigation ok:', response?.status());
 
-    // Minimal dynamic content wait - only for essential content
-    console.log('[audit] checking for basic content');
+    // Enhanced dynamic content wait with more resources
+    console.log('[audit] waiting for dynamic content');
     try {
       await page.waitForFunction(
         () => {
+          // Check if page has substantially loaded
           const body = document.body;
-          return body && (body.innerText || body.textContent || '').length > 50;
+          if (!body) return false;
+          
+          // Check if there's meaningful content
+          const textContent = body.innerText || body.textContent || '';
+          return textContent.length > 100;
         },
-        { timeout: 5_000 } // Very short timeout
+        { timeout: 15_000 } // Increased timeout
       );
+      
+      // Additional wait for any async operations
+      await new Promise(resolve => setTimeout(resolve, 3_000)); // Back to 3 seconds
     } catch (waitError) {
-      console.warn('[audit] basic content wait failed:', (waitError as Error).message);
+      console.warn('[audit] dynamic content wait failed:', (waitError as Error).message);
       // Continue anyway - page might still be auditable
     }
 
@@ -385,13 +392,15 @@ export class AuditService {
   }
 
   private async progressiveGoto(page: Page, url: string): Promise<HTTPResponse | null> {
-    // Minimal navigation strategy optimized for resource-constrained environments
+    // Enhanced navigation strategies for JS-heavy sites with better resource allocation
     const attempts: Array<{ name: string; opts: Parameters<Page['goto']>[1]; allowErrors?: boolean }> = [
-      // Start with very fast strategy
-      { name: 'basic-quick', opts: { timeout: 15_000 }, allowErrors: true },
-      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 20_000 } },
-      // Only try load if the others fail
-      { name: 'load-fallback', opts: { waitUntil: 'load', timeout: 25_000 }, allowErrors: true },
+      // Start with basic strategy but allow more time
+      { name: 'basic-fast', opts: { timeout: 25_000 }, allowErrors: true },
+      { name: 'domcontentloaded', opts: { waitUntil: 'domcontentloaded', timeout: 35_000 } },
+      { name: 'load', opts: { waitUntil: 'load', timeout: 45_000 } },
+      { name: 'networkidle2', opts: { waitUntil: 'networkidle2', timeout: 40_000 } },
+      // Final fallback with generous timeout
+      { name: 'load-fallback', opts: { waitUntil: 'load', timeout: 30_000 }, allowErrors: true },
     ];
 
     let lastResponse: HTTPResponse | null = null;
@@ -414,21 +423,23 @@ export class AuditService {
           lastResponse = res;
         }
 
-        // Minimal JS wait for basic interactivity
-        if (name === 'basic-quick') {
-          console.log(`[audit] minimal JS wait after ${name}`);
+        // For JS-heavy sites, wait for better interactivity with more time
+        if (name === 'basic-fast' || name === 'domcontentloaded') {
+          console.log(`[audit] waiting for JS execution after ${name}`);
           try {
             await page.waitForFunction(
-              () => document.readyState !== 'loading',
-              { timeout: 3_000 } // Very short timeout
+              () => document.readyState === 'complete' || document.readyState === 'interactive',
+              { timeout: 8_000 } // Increased timeout with more RAM
             );
+            // Additional wait for dynamic content
+            await new Promise(resolve => setTimeout(resolve, 2_000));
           } catch (jsWaitError) {
             console.warn(`[audit] JS wait failed after ${name}:`, (jsWaitError as Error).message);
             // Continue anyway
           }
         }
 
-        // Return quickly to avoid memory buildup
+        // Return the response
         return lastResponse;
 
       } catch (e) {
@@ -442,6 +453,11 @@ export class AuditService {
           console.error('[audit] Network connectivity issue, stopping attempts');
           break;
         }
+        
+        // For timeout errors, try the next strategy
+        if (error.message.includes('timeout') || error.message.includes('Navigation timeout')) {
+          continue;
+        }
       }
     }
 
@@ -451,18 +467,18 @@ export class AuditService {
       return lastResponse;
     }
 
-    // Final content check with short timeout
+    // Final content check with reasonable timeout
     try {
       const content = await page.content();
-      if (content && content.length > 50) { // Lower threshold
-        console.log('[audit] page has some content despite navigation errors, proceeding');
+      if (content && content.length > 100) { // Higher threshold again
+        console.log('[audit] page has content despite navigation errors, proceeding');
         return null;
       }
     } catch (contentError) {
       console.warn('[audit] failed to check page content:', (contentError as Error).message);
     }
 
-    throw new Error(`Navigation failed after minimal strategies. Last error: ${lastError?.message || 'Unknown error'}`);
+    throw new Error(`Navigation failed after enhanced strategies. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 
   // ---------- Optional: issue extraction scaffold (unused for now) ----------
