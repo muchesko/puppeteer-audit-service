@@ -106,6 +106,28 @@ export class AuditService {
   private jobResults = new Map<string, AuditResult>();
   private activeJobs = 0;
   private readonly maxConcurrentJobs = 1;
+  
+  // Queue system for processing audit requests
+  private queue: AuditRequest[] = [];
+  private pumping = false;
+
+  // Centralized timeouts
+  private readonly TIME = {
+    job: 150_000,
+    nav: 45_000,
+    page: 75_000,
+    psi: 60_000
+  } as const;
+
+  // ---------- URL validation ----------
+
+  private normalizeAndValidateUrl(raw: string): string {
+    const u = new URL(raw);
+    if (!['http:', 'https:'].includes(u.protocol)) throw new Error('Only http/https allowed');
+    const host = u.hostname.toLowerCase();
+    if (['localhost','127.0.0.1','::1'].includes(host)) throw new Error('Local addresses not allowed');
+    return u.toString();
+  }
 
   // ---------- Browser boot ----------
 
@@ -191,11 +213,25 @@ export class AuditService {
   // ---------- Public API ----------
 
   async startAudit(request: AuditRequest): Promise<void> {
-    if (this.activeJobs >= this.maxConcurrentJobs) {
-      throw new Error('Maximum concurrent jobs reached');
+    this.queue.push(request);
+    this.pumpQueue();
+  }
+
+  private async pumpQueue(): Promise<void> {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      while (this.activeJobs < this.maxConcurrentJobs && this.queue.length) {
+        const next = this.queue.shift()!;
+        this.activeJobs++;
+        this.processAudit(next).finally(() => {
+          this.activeJobs--;
+          this.pumpQueue();
+        });
+      }
+    } finally {
+      this.pumping = false;
     }
-    // fire-and-forget (no await) – but we still guard all errors inside
-    this.processAudit(request);
   }
 
   async getAuditStatus(jobId: string): Promise<string | null> {
@@ -282,7 +318,7 @@ export class AuditService {
       apiUrl.searchParams.set('category', 'performance');
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60_000); // 60 second timeout
+      const timeout = setTimeout(() => controller.abort(), this.TIME.psi);
 
       const response = await fetch(apiUrl.toString(), {
         signal: controller.signal,
@@ -359,45 +395,39 @@ export class AuditService {
     this.jobStatuses.set(request.jobId, 'PROCESSING');
 
     let page: Page | null = null;
+    let context: any = null;
     try {
       console.log(`[audit] job ${request.jobId} → ${request.websiteUrl}`);
+
+      // Validate and normalize URL once at the top
+      const targetUrl = this.normalizeAndValidateUrl(request.websiteUrl);
 
       // Quick preflight: don’t spawn Chrome if URL is dead
       try {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 8_000);
-        const head = await fetch(request.websiteUrl, { method: 'HEAD', signal: ctrl.signal });
+        const head = await fetch(targetUrl, { method: 'HEAD', signal: ctrl.signal });
         clearTimeout(t);
         console.log('[audit] preflight:', head.status);
       } catch (e) {
         throw new Error(`Preflight failed: ${(e as Error).message}`);
       }
 
-      // Launch with a small retry
-      let browser: Browser | null = null;
-      for (let i = 0; i < 2; i++) {
-        try {
-          console.log(`[audit] launching browser (attempt ${i + 1}/2)`);
-          browser = await this.getBrowser();
-          break;
-        } catch (e) {
-          if (i === 1) throw e;
-          await new Promise(r => setTimeout(r, 2_000));
-        }
-      }
-      if (!browser) throw new Error('Browser failed to launch');
+      // Get warm browser and create incognito context
+      const browser = await this.getBrowser();
+      context = await browser.createBrowserContext();
 
-      // Create page with watchdog (fail fast if renderer dies)
-      page = await this.createPageWithWatchdog(browser, 25_000);
+      // Create page off the context
+      page = await this.createPageWithWatchdog(context as unknown as Browser, 25_000);
       this.hookPageLogs(page);
 
       // Job-level watchdog so we never hang forever
       const jobWatchdog = new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error('Job watchdog timeout')), 150_000) // Increased to 2.5 minutes with more RAM
+        setTimeout(() => rej(new Error('Job watchdog timeout')), this.TIME.job)
       );
 
       const result = await Promise.race([
-        this.runSinglePageAudit(page, request),
+        this.runSinglePageAudit(page, { ...request, websiteUrl: targetUrl }),
         jobWatchdog,
       ]);
 
@@ -421,29 +451,22 @@ export class AuditService {
       this.jobResults.set(request.jobId, fail);
       this.sendCallback(fail).catch(err => console.warn('[callback] error (ignored):', err));
     } finally {
-      // Close page first
+      // Close page and context only (keep browser warm)
       try { await page?.close({ runBeforeUnload: false }); } catch { /* ignore */ }
-
-      // Try graceful browser close after each job to prevent leaks
-      try {
-        await this.activeBrowser?.close();
-      } catch { /* ignore */ }
-
-      // If Chrome is wedged, hard kill the child proc
-      try { this.activeBrowser?.process()?.kill('SIGKILL'); } catch { /* ignore */ }
-      this.activeBrowser = null;
-
-      this.activeJobs--;
+      try { await context?.close(); } catch { /* ignore */ }
+      
+      // DO NOT close or SIGKILL the shared browser here anymore
+      this.activeBrowser = this.activeBrowser; // no-op: keep it
     }
   }
 
   // ---------- Helpers ----------
 
-  private async createPageWithWatchdog(browser: Browser, timeoutMs: number): Promise<Page> {
+  private async createPageWithWatchdog(host: { newPage(): Promise<Page> }, timeoutMs: number): Promise<Page> {
     console.log('[audit] creating page…');
     const created = await Promise.race([
       (async () => {
-        const p = await browser.newPage();
+        const p = await host.newPage();
         console.log('[audit] page created');
         return p;
       })(),
@@ -476,8 +499,19 @@ export class AuditService {
     }
 
     console.log('[audit] set timeouts');
-    page.setDefaultTimeout(75_000); // Increased with more RAM
-    page.setDefaultNavigationTimeout(75_000);
+    page.setDefaultTimeout(this.TIME.page);
+    page.setDefaultNavigationTimeout(this.TIME.nav);
+
+    // Light request interception (only when not screenshotting)
+    if (!request.options?.includeScreenshot) {
+      await page.setRequestInterception(true);
+      const blocked = ['doubleclick.net','googletagmanager.com','facebook.net','youtube.com'];
+      page.on('request', r => {
+        const url = r.url();
+        if (blocked.some(d => url.includes(d))) return r.abort();
+        r.continue();
+      });
+    }
 
     console.log('[audit] navigating', request.websiteUrl);
     const response = await this.progressiveGoto(page, request.websiteUrl);
