@@ -531,8 +531,13 @@ export class AuditService {
       const pageSpeedData = await this.getPageSpeedInsights(request.websiteUrl);
       if (pageSpeedData) {
         pageSpeedMetrics = pageSpeedData;
-        // Use desktop performance score as primary score, but could be configurable
-        performanceScore = pageSpeedData.desktop.performanceScore;
+        // Calculate combined performance score from desktop and mobile
+        // Weight: 60% desktop, 40% mobile (desktop slightly prioritized)
+        const desktopScore = pageSpeedData.desktop.performanceScore;
+        const mobileScore = pageSpeedData.mobile.performanceScore;
+        performanceScore = Math.round((desktopScore * 0.6) + (mobileScore * 0.4));
+        
+        console.log(`[audit] combined performance score: ${performanceScore} (desktop: ${desktopScore}, mobile: ${mobileScore})`);
       } else {
         // Fallback to basic performance scoring if PageSpeed fails
         performanceScore = Math.max(0, Math.min(100, 100 - Math.floor(loadTime / 100)));
@@ -888,6 +893,27 @@ export class AuditService {
         performance: {
           score: performanceScore,
           items: [
+            // Combined score explanation when PageSpeed data is available
+            ...(pageSpeedMetrics ? [
+              {
+                title: 'Overall Performance Score',
+                value: `${performanceScore}/100`,
+                status: performanceScore >= 90 ? 'PASS' : performanceScore >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: `Combined score (60% desktop + 40% mobile): Desktop ${pageSpeedMetrics.desktop?.performanceScore || 0}/100, Mobile ${pageSpeedMetrics.mobile?.performanceScore || 0}/100`
+              },
+              {
+                title: 'Desktop Performance Score',
+                value: `${pageSpeedMetrics.desktop?.performanceScore || 0}/100`,
+                status: (pageSpeedMetrics.desktop?.performanceScore || 0) >= 90 ? 'PASS' : (pageSpeedMetrics.desktop?.performanceScore || 0) >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Google PageSpeed Insights desktop performance score'
+              },
+              {
+                title: 'Mobile Performance Score',
+                value: `${pageSpeedMetrics.mobile?.performanceScore || 0}/100`,
+                status: (pageSpeedMetrics.mobile?.performanceScore || 0) >= 90 ? 'PASS' : (pageSpeedMetrics.mobile?.performanceScore || 0) >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                description: 'Google PageSpeed Insights mobile performance score'
+              }
+            ] : []),
             {
               title: 'Page Load Time',
               value: `${loadTime}ms`,
@@ -895,18 +921,6 @@ export class AuditService {
               description: loadTime < 2000 ? 'Page loads quickly' : loadTime < 4000 ? 'Page load time could be improved' : 'Page loads slowly, consider optimizing'
             },
             ...(pageSpeedMetrics ? [
-              {
-                title: 'Desktop Performance Score',
-                value: `${pageSpeedMetrics.desktop?.performanceScore || 0}`,
-                status: (pageSpeedMetrics.desktop?.performanceScore || 0) >= 90 ? 'PASS' : (pageSpeedMetrics.desktop?.performanceScore || 0) >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
-                description: 'Google PageSpeed Insights desktop performance score'
-              },
-              {
-                title: 'Mobile Performance Score',
-                value: `${pageSpeedMetrics.mobile?.performanceScore || 0}`,
-                status: (pageSpeedMetrics.mobile?.performanceScore || 0) >= 90 ? 'PASS' : (pageSpeedMetrics.mobile?.performanceScore || 0) >= 50 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
-                description: 'Google PageSpeed Insights mobile performance score'
-              },
               {
                 title: 'First Contentful Paint (Desktop)',
                 value: `${pageSpeedMetrics.desktop?.firstContentfulPaint || 0}ms`,
@@ -1149,18 +1163,18 @@ export class AuditService {
         type: 'ERROR',
         category: 'PERFORMANCE',
         title: 'Poor Performance Score',
-        description: `Performance score is ${auditData.performanceScore}/100, which is below acceptable standards.`,
+        description: `Overall performance score is ${auditData.performanceScore}/100 (combined desktop & mobile), which is below acceptable standards.`,
         impact: 'HIGH',
-        recommendation: 'Optimize images, minify CSS/JS, enable compression, and reduce server response times.'
+        recommendation: 'Optimize images, minify CSS/JS, enable compression, and reduce server response times for both desktop and mobile.'
       });
     } else if (auditData.performanceScore < 70) {
       issues.push({
         type: 'WARNING',
         category: 'PERFORMANCE',
         title: 'Below Average Performance',
-        description: `Performance score is ${auditData.performanceScore}/100, which could be improved.`,
+        description: `Overall performance score is ${auditData.performanceScore}/100 (combined desktop & mobile), which could be improved.`,
         impact: 'MEDIUM',
-        recommendation: 'Consider optimizing images, reducing JavaScript execution time, and improving server response times.'
+        recommendation: 'Consider optimizing images, reducing JavaScript execution time, and improving server response times for both platforms.'
       });
     }
 
