@@ -992,10 +992,27 @@ export class AuditService {
       },
       pagesCrawled: 1,
       screenshot,
-      issues: [] as NonNullable<NonNullable<AuditResult['results']>['issues']>,
     };
 
-    return { jobId: request.jobId, status: 'COMPLETED', results };
+    // Generate issues based on audit results
+    console.log('[audit] generating issues from audit results');
+    const issues = this.extractIssues({
+      performanceScore,
+      seoScore,
+      accessibilityScore,
+      bestPracticesScore: 75,
+      loadTime,
+      categoryDetails: results.categoryDetails,
+      pageSpeedMetrics
+    });
+
+    // Add issues to results
+    const finalResults = {
+      ...results,
+      issues,
+    };
+
+    return { jobId: request.jobId, status: 'COMPLETED', results: finalResults };
   }
 
   private async progressiveGoto(page: Page, url: string): Promise<HTTPResponse | null> {
@@ -1088,10 +1105,35 @@ export class AuditService {
     throw new Error(`Navigation failed after enhanced strategies. Last error: ${lastError?.message || 'Unknown error'}`);
   }
 
-  // ---------- Optional: issue extraction scaffold (unused for now) ----------
+  // ---------- Issue extraction from audit results ----------
 
-  /* eslint-disable @typescript-eslint/no-unused-vars */
-  private extractIssues(_lhr: any) {
+  private extractIssues(auditData: {
+    performanceScore: number;
+    seoScore: number;
+    accessibilityScore: number;
+    bestPracticesScore: number;
+    loadTime: number;
+    categoryDetails?: {
+      performance?: { items: Array<{ title: string; status: string; description: string }> };
+      seo?: { items: Array<{ title: string; status: string; description: string }> };
+      accessibility?: { items: Array<{ title: string; status: string; description: string }> };
+      bestPractices?: { items: Array<{ title: string; status: string; description: string }> };
+    };
+    pageSpeedMetrics?: {
+      desktop?: {
+        firstContentfulPaint?: number;
+        largestContentfulPaint?: number;
+        cumulativeLayoutShift?: number;
+        totalBlockingTime?: number;
+      };
+      mobile?: {
+        firstContentfulPaint?: number;
+        largestContentfulPaint?: number;
+        cumulativeLayoutShift?: number;
+        totalBlockingTime?: number;
+      };
+    };
+  }) {
     const issues: Array<{
       type: 'ERROR' | 'WARNING' | 'INFO';
       category: 'PERFORMANCE' | 'SEO' | 'ACCESSIBILITY' | 'BEST_PRACTICES';
@@ -1100,9 +1142,234 @@ export class AuditService {
       impact: 'HIGH' | 'MEDIUM' | 'LOW';
       recommendation: string;
     }> = [];
+
+    // Performance Issues
+    if (auditData.performanceScore < 50) {
+      issues.push({
+        type: 'ERROR',
+        category: 'PERFORMANCE',
+        title: 'Poor Performance Score',
+        description: `Performance score is ${auditData.performanceScore}/100, which is below acceptable standards.`,
+        impact: 'HIGH',
+        recommendation: 'Optimize images, minify CSS/JS, enable compression, and reduce server response times.'
+      });
+    } else if (auditData.performanceScore < 70) {
+      issues.push({
+        type: 'WARNING',
+        category: 'PERFORMANCE',
+        title: 'Below Average Performance',
+        description: `Performance score is ${auditData.performanceScore}/100, which could be improved.`,
+        impact: 'MEDIUM',
+        recommendation: 'Consider optimizing images, reducing JavaScript execution time, and improving server response times.'
+      });
+    }
+
+    // Page load time issues
+    if (auditData.loadTime > 5000) {
+      issues.push({
+        type: 'ERROR',
+        category: 'PERFORMANCE',
+        title: 'Slow Page Load Time',
+        description: `Page takes ${Math.round(auditData.loadTime)}ms to load, which is significantly slower than recommended.`,
+        impact: 'HIGH',
+        recommendation: 'Optimize server response time, compress assets, and consider using a CDN.'
+      });
+    } else if (auditData.loadTime > 3000) {
+      issues.push({
+        type: 'WARNING',
+        category: 'PERFORMANCE',
+        title: 'Page Load Time Could Be Improved',
+        description: `Page takes ${Math.round(auditData.loadTime)}ms to load. Aim for under 3 seconds.`,
+        impact: 'MEDIUM',
+        recommendation: 'Optimize images, minify resources, and reduce HTTP requests.'
+      });
+    }
+
+    // Core Web Vitals issues from PageSpeed data
+    if (auditData.pageSpeedMetrics) {
+      const { desktop, mobile } = auditData.pageSpeedMetrics;
+      
+      // Largest Contentful Paint issues
+      if (desktop?.largestContentfulPaint && desktop.largestContentfulPaint > 4000) {
+        issues.push({
+          type: 'ERROR',
+          category: 'PERFORMANCE',
+          title: 'Poor Largest Contentful Paint (Desktop)',
+          description: `LCP is ${Math.round(desktop.largestContentfulPaint)}ms on desktop. Good LCP is under 2.5 seconds.`,
+          impact: 'HIGH',
+          recommendation: 'Optimize server response times, remove render-blocking resources, and optimize the largest element.'
+        });
+      }
+
+      if (mobile?.largestContentfulPaint && mobile.largestContentfulPaint > 4000) {
+        issues.push({
+          type: 'ERROR',
+          category: 'PERFORMANCE',
+          title: 'Poor Largest Contentful Paint (Mobile)',
+          description: `LCP is ${Math.round(mobile.largestContentfulPaint)}ms on mobile. Good LCP is under 2.5 seconds.`,
+          impact: 'HIGH',
+          recommendation: 'Optimize for mobile: compress images, reduce JavaScript, and improve server response times.'
+        });
+      }
+
+      // Cumulative Layout Shift issues
+      if (desktop?.cumulativeLayoutShift && desktop.cumulativeLayoutShift > 0.25) {
+        issues.push({
+          type: 'WARNING',
+          category: 'PERFORMANCE',
+          title: 'High Cumulative Layout Shift (Desktop)',
+          description: `CLS score is ${desktop.cumulativeLayoutShift}, indicating visual instability.`,
+          impact: 'MEDIUM',
+          recommendation: 'Add size attributes to images and videos, avoid inserting content above existing content.'
+        });
+      }
+
+      if (mobile?.cumulativeLayoutShift && mobile.cumulativeLayoutShift > 0.25) {
+        issues.push({
+          type: 'WARNING',
+          category: 'PERFORMANCE',
+          title: 'High Cumulative Layout Shift (Mobile)',
+          description: `CLS score is ${mobile.cumulativeLayoutShift}, indicating visual instability on mobile.`,
+          impact: 'MEDIUM',
+          recommendation: 'Ensure mobile layouts are stable by reserving space for dynamic content.'
+        });
+      }
+    }
+
+    // SEO Issues
+    if (auditData.seoScore < 50) {
+      issues.push({
+        type: 'ERROR',
+        category: 'SEO',
+        title: 'Poor SEO Score',
+        description: `SEO score is ${auditData.seoScore}/100, which may significantly impact search rankings.`,
+        impact: 'HIGH',
+        recommendation: 'Review meta tags, heading structure, image alt text, and content quality.'
+      });
+    } else if (auditData.seoScore < 70) {
+      issues.push({
+        type: 'WARNING',
+        category: 'SEO',
+        title: 'SEO Score Needs Improvement',
+        description: `SEO score is ${auditData.seoScore}/100. There are opportunities for improvement.`,
+        impact: 'MEDIUM',
+        recommendation: 'Optimize meta descriptions, improve heading hierarchy, and add structured data.'
+      });
+    }
+
+    // Check SEO category details for specific issues
+    if (auditData.categoryDetails?.seo?.items) {
+      for (const item of auditData.categoryDetails.seo.items) {
+        if (item.status === 'FAIL') {
+          let impact: 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM';
+          let recommendation = 'Please review and fix this SEO issue.';
+
+          // Customize based on specific SEO issues
+          if (item.title.toLowerCase().includes('title')) {
+            impact = 'HIGH';
+            recommendation = 'Add a descriptive, unique title tag under 60 characters.';
+          } else if (item.title.toLowerCase().includes('description')) {
+            impact = 'HIGH';
+            recommendation = 'Add a compelling meta description between 150-160 characters.';
+          } else if (item.title.toLowerCase().includes('heading')) {
+            impact = 'MEDIUM';
+            recommendation = 'Ensure proper heading hierarchy with a single H1 tag.';
+          }
+
+          issues.push({
+            type: 'ERROR',
+            category: 'SEO',
+            title: item.title,
+            description: item.description,
+            impact,
+            recommendation
+          });
+        }
+      }
+    }
+
+    // Accessibility Issues
+    if (auditData.accessibilityScore < 50) {
+      issues.push({
+        type: 'ERROR',
+        category: 'ACCESSIBILITY',
+        title: 'Poor Accessibility Score',
+        description: `Accessibility score is ${auditData.accessibilityScore}/100, making the site difficult to use for people with disabilities.`,
+        impact: 'HIGH',
+        recommendation: 'Add alt text to images, ensure proper color contrast, and provide keyboard navigation.'
+      });
+    } else if (auditData.accessibilityScore < 80) {
+      issues.push({
+        type: 'WARNING',
+        category: 'ACCESSIBILITY',
+        title: 'Accessibility Could Be Improved',
+        description: `Accessibility score is ${auditData.accessibilityScore}/100. Consider improving for better inclusivity.`,
+        impact: 'MEDIUM',
+        recommendation: 'Review form labels, heading structure, and ensure all interactive elements are accessible.'
+      });
+    }
+
+    // Check accessibility category details for specific issues
+    if (auditData.categoryDetails?.accessibility?.items) {
+      for (const item of auditData.categoryDetails.accessibility.items) {
+        if (item.status === 'FAIL') {
+          let impact: 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM';
+          let recommendation = 'Please review and fix this accessibility issue.';
+
+          // Customize based on specific accessibility issues
+          if (item.title.toLowerCase().includes('alt')) {
+            impact = 'HIGH';
+            recommendation = 'Add descriptive alt text to all images for screen readers.';
+          } else if (item.title.toLowerCase().includes('label')) {
+            impact = 'HIGH';
+            recommendation = 'Ensure all form inputs have proper labels for screen readers.';
+          } else if (item.title.toLowerCase().includes('heading')) {
+            impact = 'MEDIUM';
+            recommendation = 'Use proper heading hierarchy (H1-H6) for screen reader navigation.';
+          }
+
+          issues.push({
+            type: 'ERROR',
+            category: 'ACCESSIBILITY',
+            title: item.title,
+            description: item.description,
+            impact,
+            recommendation
+          });
+        }
+      }
+    }
+
+    // Best Practices Issues
+    if (auditData.bestPracticesScore < 70) {
+      issues.push({
+        type: 'WARNING',
+        category: 'BEST_PRACTICES',
+        title: 'Best Practices Score Below Recommended',
+        description: `Best practices score is ${auditData.bestPracticesScore}/100. Following web standards is important for security and performance.`,
+        impact: 'MEDIUM',
+        recommendation: 'Ensure HTTPS usage, avoid deprecated APIs, and follow modern web development practices.'
+      });
+    }
+
+    // Check best practices category details for specific issues
+    if (auditData.categoryDetails?.bestPractices?.items) {
+      for (const item of auditData.categoryDetails.bestPractices.items) {
+        if (item.status === 'FAIL') {
+          issues.push({
+            type: 'WARNING',
+            category: 'BEST_PRACTICES',
+            title: item.title,
+            description: item.description,
+            impact: 'MEDIUM',
+            recommendation: 'Follow modern web development best practices for better security and performance.'
+          });
+        }
+      }
+    }
+
     return issues;
   }
-  /* eslint-enable @typescript-eslint/no-unused-vars */
 
   // ---------- Callback ----------
 
