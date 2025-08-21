@@ -179,6 +179,14 @@ export class AuditService {
             '--disable-translate',
             '--allow-running-insecure-content',
             '--ignore-certificate-errors',
+
+            // Additional stability flags for containerized environments
+            '--disable-crashpad',
+            '--disable-crash-reporter',
+            '--no-crash-upload',
+            '--memory-pressure-off',
+            '--max_old_space_size=512',
+            '--disable-field-trial-config',
         ];
 
         const launchOpts: LaunchOptions = {
@@ -208,6 +216,36 @@ export class AuditService {
             this.activeBrowser = await this.launchBrowser();
         }
         return this.activeBrowser!;
+    }
+
+    private async getBrowserWithRetry(maxRetries = 3): Promise<Browser> {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const browser = await this.getBrowser();
+                
+                // Test browser connectivity
+                const pages = await browser.pages();
+                console.log(`[browser] attempt ${attempt}: browser has ${pages.length} pages`);
+                
+                return browser;
+            } catch (error) {
+                console.error(`[browser] attempt ${attempt} failed:`, (error as Error).message);
+                
+                // Force cleanup and retry
+                try { 
+                    await this.activeBrowser?.close(); 
+                } catch { /* ignore */ }
+                this.activeBrowser = null;
+                
+                if (attempt === maxRetries) {
+                    throw new Error(`Failed to get browser after ${maxRetries} attempts: ${(error as Error).message}`);
+                }
+                
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            }
+        }
+        throw new Error('Unexpected getBrowserWithRetry completion');
     }
 
     // ---------- Public API ----------
@@ -415,38 +453,82 @@ export class AuditService {
                 throw new Error(`Preflight failed: ${(e as Error).message}`);
             }
 
-            // Get warm browser and create incognito context
-            const browser = await this.getBrowser();
-            context = await browser.createBrowserContext();
+            // Browser operation with retry logic
+            let browserRetries = 0;
+            const maxBrowserRetries = 2;
+            let auditCompleted = false;
 
-            // Create page off the context
-            page = await this.createPageWithWatchdog(context, 25_000); // no cast needed
-            this.hookPageLogs(page);
+            while (!auditCompleted && browserRetries <= maxBrowserRetries) {
+                try {
+                    // Get warm browser and create incognito context
+                    const browser = await this.getBrowserWithRetry();
+                    context = await browser.createBrowserContext();
 
-            // Job-level watchdog so we never hang forever
-            const jobWatchdog = new Promise<never>((_, rej) =>
-                setTimeout(() => rej(new Error('Job watchdog timeout')), this.TIME.job)
-            );
+                    // Create page off the context
+                    page = await this.createPageWithWatchdog(context, 25_000);
+                    this.hookPageLogs(page);
 
-            const result = await Promise.race([
-                this.runSinglePageAudit(page, { ...request, websiteUrl: targetUrl }),
-                jobWatchdog,
-            ]);
+                    // Job-level watchdog so we never hang forever
+                    const jobWatchdog = new Promise<never>((_, rej) =>
+                        setTimeout(() => rej(new Error('Job watchdog timeout')), this.TIME.job)
+                    );
 
-            // persist + callback
-            this.jobStatuses.set(request.jobId, 'COMPLETED');
-            this.jobResults.set(request.jobId, result);
-            console.log(`[audit] job ${request.jobId} completed`, {
-                performance: result.results?.performanceScore,
-                seo: result.results?.seoScore,
-                accessibility: result.results?.accessibilityScore,
-                bestPractices: result.results?.bestPracticesScore,
-            });
-            this.sendCallback(result).catch(err => console.warn('[callback] error (ignored):', err));
+                    const result = await Promise.race([
+                        this.runSinglePageAudit(page, { ...request, websiteUrl: targetUrl }),
+                        jobWatchdog,
+                    ]);
+
+                    // If we get here, the audit succeeded
+                    this.jobStatuses.set(request.jobId, 'COMPLETED');
+                    this.jobResults.set(request.jobId, result);
+                    console.log(`[audit] job ${request.jobId} completed`, {
+                        performance: result.results?.performanceScore,
+                        seo: result.results?.seoScore,
+                        accessibility: result.results?.accessibilityScore,
+                        bestPractices: result.results?.bestPracticesScore,
+                    });
+                    this.sendCallback(result).catch(err => console.warn('[callback] error (ignored):', err));
+                    auditCompleted = true; // Success - exit the retry loop
+
+                } catch (auditError) {
+                    const errText = auditError instanceof Error ? auditError.message : 'Unknown error';
+                    console.error(`[audit] job ${request.jobId} attempt ${browserRetries + 1} failed:`, errText);
+
+                    // Check if this is a browser connectivity issue
+                    if (errText.includes('Target closed') || 
+                        errText.includes('Protocol error') || 
+                        errText.includes('Session closed') ||
+                        errText.includes('Connection closed') ||
+                        errText.includes('Page is closed')) {
+                        
+                        browserRetries++;
+                        if (browserRetries <= maxBrowserRetries) {
+                            console.log(`[audit] retrying job ${request.jobId} (attempt ${browserRetries + 1}/${maxBrowserRetries + 1})`);
+                            
+                            // Clean up current resources
+                            try { await page?.close({ runBeforeUnload: false }); } catch { /* ignore */ }
+                            try { await context?.close(); } catch { /* ignore */ }
+                            page = null;
+                            context = null;
+                            
+                            // Force browser reset
+                            try { await this.activeBrowser?.close(); } catch { /* ignore */ }
+                            this.activeBrowser = null;
+                            
+                            // Wait before retry
+                            await new Promise(resolve => setTimeout(resolve, 2000 + (browserRetries * 1000)));
+                            continue; // Retry the browser operation
+                        }
+                    }
+                    
+                    // Non-retryable error or max retries reached
+                    throw auditError;
+                }
+            }
 
         } catch (error) {
             const errText = error instanceof Error ? `${error.name}: ${error.message}` : 'Unknown error';
-            console.error(`[audit] job ${request.jobId} failed:`, errText);
+            console.error(`[audit] job ${request.jobId} failed after all retries:`, errText);
 
             const fail: AuditResult = { jobId: request.jobId, status: 'FAILED', error: errText };
             this.jobStatuses.set(request.jobId, 'FAILED');
@@ -1082,6 +1164,11 @@ export class AuditService {
 
         for (const { name, opts, allowErrors } of attempts) {
             try {
+                // Check if page is still connected before navigation
+                if (page.isClosed()) {
+                    throw new Error('Page is closed before navigation attempt');
+                }
+
                 console.log(`[audit] goto (${name})`, { timeout: opts?.timeout, waitUntil: opts?.waitUntil || 'default' });
                 const res = await page.goto(url, opts as any);
 
@@ -1120,6 +1207,15 @@ export class AuditService {
                 const error = e as Error;
                 lastError = error;
                 console.warn(`[audit] goto (${name}) failed:`, error.message);
+
+                // For browser connectivity errors, propagate immediately to trigger retry
+                if (error.message.includes('Target closed') || 
+                    error.message.includes('Protocol error') || 
+                    error.message.includes('Session closed') ||
+                    error.message.includes('Connection closed')) {
+                    console.error('[audit] Browser connectivity issue detected during navigation');
+                    throw error; // Propagate to trigger browser retry
+                }
 
                 // For certain errors, don't continue trying
                 if (error.message.includes('net::ERR_NAME_NOT_RESOLVED') ||
