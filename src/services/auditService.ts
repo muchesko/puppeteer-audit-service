@@ -150,6 +150,9 @@ export class AuditService {
         // Pipe transport is lighter than WS on small instances
         const usePipe = true;
 
+        // Create unique user data directory to avoid singleton conflicts
+        const userDataDir = `/tmp/chrome-data-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
         const args: string[] = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -160,7 +163,7 @@ export class AuditService {
             '--hide-scrollbars',
             '--mute-audio',
             '--disable-extensions',
-            '--user-data-dir=/tmp/chrome-data',
+            `--user-data-dir=${userDataDir}`,
 
             // keep Chrome lean but allow JIT compilation with more RAM
             '--renderer-process-limit=1',
@@ -187,6 +190,14 @@ export class AuditService {
             '--memory-pressure-off',
             '--max_old_space_size=512',
             '--disable-field-trial-config',
+            
+            // Fix for process singleton issues in containers
+            '--no-process-singleton-dialog',
+            '--disable-session-crashed-bubble',
+            '--disable-infobars',
+            '--disable-web-security',
+            '--disable-features=TranslateUI',
+            '--disable-ipc-flooding-protection',
         ];
 
         const launchOpts: LaunchOptions = {

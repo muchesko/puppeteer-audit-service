@@ -58,8 +58,17 @@ export class PDFService {
       '--hide-scrollbars',
       '--mute-audio',
       '--disable-extensions',
-      '--user-data-dir=/tmp/chrome-data',
-      // DO NOT set --single-process or remote debugging flags in prod
+      '--user-data-dir=/tmp/chrome-pdf-data',
+      // Additional stability flags for containerized environments
+      '--disable-crashpad',
+      '--disable-crash-reporter',
+      '--no-crash-upload',
+      '--memory-pressure-off',
+      '--max_old_space_size=512',
+      '--disable-field-trial-config',
+      '--single-process',               // For PDF generation in containers
+      '--disable-web-security',        // For generating PDFs from HTML content
+      // DO NOT set remote debugging flags in prod
     ];
 
     const launchOpts: LaunchOptions = {
