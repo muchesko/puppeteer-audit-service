@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import { config } from './config/index.js';
 import { auditRouter } from './routes/audit.js';
 import { pdfRouter } from './routes/pdf.js';
+import { reportRouter } from './routes/report.js';
 import { healthRouter } from './routes/health.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -74,6 +75,7 @@ app.use('/health', healthRouter);
 // Protected routes
 app.use('/api/audit', authMiddleware, auditRouter);
 app.use('/api/pdf', authMiddleware, pdfRouter);
+app.use('/api/report', authMiddleware, reportRouter);
 
 // Error handling
 app.use(errorHandler);
