@@ -107,12 +107,34 @@ export class PDFService {
     page.on('requestfailed', r => console.warn('[pdf][requestfailed]', r.url(), r.failure()?.errorText));
 
     try {
+      // Set viewport for consistent rendering
+      await page.setViewport({ 
+        width: 1024, 
+        height: 1400, 
+        deviceScaleFactor: 1 
+      });
+
       // Load the HTML string
       await this.setHTMLContent(page, request.htmlContent);
 
       // Ensure print CSS takes effect and fonts are ready
       await page.emulateMediaType('print');
       await this.waitForFonts(page);
+      
+      // Wait for any dynamic content to settle
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Additional wait for layout stabilization
+      await page.evaluate(() => {
+        return new Promise(resolve => {
+          // Wait for any pending layout calculations
+          if (document.readyState === 'complete') {
+            resolve(true);
+          } else {
+            window.addEventListener('load', () => resolve(true));
+          }
+        });
+      });
 
       // Build PDF options safely
       const pdfOptions = this.buildPdfOptions(request.options);
@@ -223,21 +245,26 @@ export class PDFService {
 
     const pdfOptions: PDFOptions = {
       // Respect CSS @page size when present
-      preferCSSPageSize: true,
+      preferCSSPageSize: false, // Disable to avoid layout issues
       format: options?.format ?? 'A4',
       landscape: options?.orientation === 'landscape',
       margin: {
-        top: options?.margin?.top ?? '1cm',
-        right: options?.margin?.right ?? '1cm',
-        bottom: options?.margin?.bottom ?? (wantsHeaderFooter ? '1.2cm' : '1cm'),
-        left: options?.margin?.left ?? '1cm',
+        top: options?.margin?.top ?? '15mm',
+        right: options?.margin?.right ?? '15mm', 
+        bottom: options?.margin?.bottom ?? (wantsHeaderFooter ? '20mm' : '15mm'),
+        left: options?.margin?.left ?? '15mm',
       },
       displayHeaderFooter: wantsHeaderFooter,
       headerTemplate: safeHeader,
       footerTemplate: safeFooter,
       printBackground: options?.printBackground !== false,
-      scale: options?.scale ?? 1,
+      scale: options?.scale ?? 0.8, // Slightly smaller scale for better fit
       timeout: config.requestTimeout ?? 60_000,
+      // Additional options for better PDF generation
+      omitBackground: false,
+      tagged: false, // Disable tagged PDF to avoid layout issues
+      width: '210mm', // A4 width
+      height: '297mm', // A4 height
     };
 
     return pdfOptions;

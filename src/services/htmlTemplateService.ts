@@ -130,115 +130,155 @@ export class HTMLTemplateService {
       
       body {
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        line-height: 1.6;
+        line-height: 1.5;
         color: #333;
-        font-size: 14px;
+        font-size: 12px;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
       }
       
       .page {
-        min-height: 297mm;
-        max-width: 210mm;
-        margin: 0 auto;
-        padding: 20mm;
+        width: 100%;
+        max-width: none;
+        margin: 0;
+        padding: 15mm 20mm 20mm 20mm;
         position: relative;
         background: white;
+        page-break-after: always;
+        page-break-inside: avoid;
+      }
+      
+      .page:last-child {
+        page-break-after: auto;
       }
       
       .page-break {
         page-break-before: always;
-        page-break-after: avoid;
+        height: 0;
+        visibility: hidden;
       }
       
       .header {
-        border-bottom: 3px solid var(--primary-color);
-        padding-bottom: 20px;
-        margin-bottom: 30px;
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
+        border-bottom: 2px solid var(--primary-color);
+        padding-bottom: 15px;
+        margin-bottom: 25px;
+        overflow: hidden;
       }
       
-      .logo-section img {
-        max-height: 50px;
-        max-width: 200px;
-        object-fit: contain;
+      .header-content {
+        width: 100%;
+        display: table;
+      }
+      
+      .logo-section {
+        display: table-cell;
+        vertical-align: top;
+        width: 50%;
       }
       
       .company-info {
+        display: table-cell;
+        vertical-align: top;
         text-align: right;
+        width: 50%;
+      }
+      
+      .logo-section img {
+        max-height: 40px;
+        max-width: 150px;
+        object-fit: contain;
       }
       
       .company-name {
-        font-size: 24px;
+        font-size: 18px;
         font-weight: bold;
         color: var(--primary-color);
-        margin-bottom: 5px;
+        margin-bottom: 3px;
       }
       
       .report-title {
-        font-size: 32px;
+        font-size: 28px;
         font-weight: bold;
         color: var(--primary-color);
-        margin: 30px 0 10px 0;
+        margin: 20px 0 8px 0;
+        page-break-after: avoid;
       }
       
       .report-subtitle {
-        font-size: 18px;
+        font-size: 16px;
         color: var(--secondary-color);
-        margin-bottom: 5px;
+        margin-bottom: 4px;
       }
       
       .report-date {
-        font-size: 14px;
+        font-size: 12px;
         color: var(--secondary-color);
+        margin-bottom: 20px;
       }
       
       .section {
-        margin-bottom: 40px;
+        margin-bottom: 25px;
+        page-break-inside: avoid;
       }
       
       .section-title {
-        font-size: 20px;
+        font-size: 16px;
         font-weight: bold;
         color: var(--primary-color);
-        margin-bottom: 15px;
-        padding-bottom: 5px;
-        border-bottom: 2px solid var(--primary-color);
+        margin-bottom: 12px;
+        padding-bottom: 3px;
+        border-bottom: 1px solid var(--primary-color);
+        page-break-after: avoid;
       }
       
-      .metrics-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 20px;
-        margin-bottom: 30px;
+      .metrics-container {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+      
+      .metrics-row {
+        width: 100%;
+        display: table;
+        margin-bottom: 15px;
       }
       
       .metric-card {
+        display: table-cell;
+        width: 25%;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 20px;
+        border-radius: 6px;
+        padding: 15px;
         text-align: center;
+        vertical-align: top;
+        margin-right: 10px;
+      }
+      
+      .metric-card:last-child {
+        margin-right: 0;
       }
       
       .metric-label {
-        font-size: 14px;
+        font-size: 11px;
         color: var(--secondary-color);
-        margin-bottom: 5px;
+        margin-bottom: 4px;
+        display: block;
       }
       
       .metric-value {
-        font-size: 36px;
+        font-size: 24px;
         font-weight: bold;
-        margin-bottom: 5px;
+        margin-bottom: 4px;
+        display: block;
       }
       
       .metric-status {
-        font-size: 12px;
+        font-size: 10px;
         font-weight: bold;
         text-transform: uppercase;
-        padding: 4px 8px;
-        border-radius: 4px;
+        padding: 3px 6px;
+        border-radius: 3px;
+        display: inline-block;
       }
       
       .score-excellent { color: #059669; background: #dcfce7; }
@@ -251,14 +291,17 @@ export class HTMLTemplateService {
       
       .issues-list {
         list-style: none;
+        width: 100%;
       }
       
       .issue-item {
         background: #f8fafc;
-        border-left: 4px solid #e2e8f0;
-        padding: 15px;
-        margin-bottom: 15px;
-        border-radius: 0 8px 8px 0;
+        border-left: 3px solid #e2e8f0;
+        padding: 12px;
+        margin-bottom: 12px;
+        border-radius: 0 6px 6px 0;
+        page-break-inside: avoid;
+        break-inside: avoid;
       }
       
       .issue-error { border-left-color: #dc2626; }
@@ -266,25 +309,26 @@ export class HTMLTemplateService {
       .issue-info { border-left-color: #2563eb; }
       
       .issue-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
+        overflow: hidden;
       }
       
       .issue-title {
         font-weight: bold;
         color: #1f2937;
-        font-size: 16px;
+        font-size: 13px;
+        float: left;
+        width: 70%;
       }
       
       .issue-type {
-        font-size: 12px;
+        font-size: 10px;
         font-weight: bold;
         text-transform: uppercase;
-        padding: 4px 8px;
-        border-radius: 4px;
-        white-space: nowrap;
+        padding: 2px 6px;
+        border-radius: 3px;
+        float: right;
+        margin-left: 10px;
       }
       
       .type-error { color: #dc2626; background: #fecaca; }
@@ -293,146 +337,212 @@ export class HTMLTemplateService {
       
       .issue-description {
         color: var(--secondary-color);
-        margin-bottom: 10px;
-        line-height: 1.5;
+        margin-bottom: 8px;
+        line-height: 1.4;
+        font-size: 11px;
+        clear: both;
       }
       
       .issue-recommendation {
         background: #f0f9ff;
         border: 1px solid #0ea5e9;
-        border-radius: 6px;
-        padding: 10px;
-        font-size: 13px;
+        border-radius: 4px;
+        padding: 8px;
+        font-size: 11px;
         color: #0c4a6e;
+        line-height: 1.3;
       }
       
       .footer {
-        position: absolute;
-        bottom: 20mm;
+        position: fixed;
+        bottom: 10mm;
         left: 20mm;
         right: 20mm;
         border-top: 1px solid #e2e8f0;
-        padding-top: 15px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 12px;
+        padding-top: 8px;
+        font-size: 10px;
         color: var(--secondary-color);
+        overflow: hidden;
       }
       
-      .page-number::after {
-        content: counter(page);
+      .footer-left {
+        float: left;
       }
       
-      .recommendations-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 20px;
+      .footer-right {
+        float: right;
+      }
+      
+      .web-vitals-container {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+      
+      .web-vitals-row {
+        width: 100%;
+        display: table;
+        margin-bottom: 10px;
+      }
+      
+      .vital-card {
+        display: table-cell;
+        width: 33.33%;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 12px;
+        vertical-align: top;
+        margin-right: 10px;
+      }
+      
+      .vital-card:last-child {
+        margin-right: 0;
+      }
+      
+      .vital-name {
+        font-size: 10px;
+        color: var(--secondary-color);
+        margin-bottom: 4px;
+        display: block;
+      }
+      
+      .vital-value {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 4px;
+        display: block;
+      }
+      
+      .vital-threshold {
+        font-size: 9px;
+        color: var(--secondary-color);
+        line-height: 1.2;
+      }
+      
+      .summary-stats {
+        background: linear-gradient(135deg, var(--primary-color), #1e40af);
+        color: white;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+        text-align: center;
+        page-break-inside: avoid;
+      }
+      
+      .summary-stats h3 {
+        font-size: 18px;
+        margin-bottom: 15px;
+      }
+      
+      .stats-container {
+        width: 100%;
+      }
+      
+      .stats-row {
+        width: 100%;
+        display: table;
+      }
+      
+      .stat-item {
+        display: table-cell;
+        text-align: center;
+        width: 25%;
+        vertical-align: top;
+      }
+      
+      .stat-value {
+        font-size: 24px;
+        font-weight: bold;
+        display: block;
+        margin-bottom: 4px;
+      }
+      
+      .stat-label {
+        font-size: 11px;
+        opacity: 0.9;
+        display: block;
+      }
+      
+      .recommendations-container {
+        width: 100%;
+      }
+      
+      .recommendations-row {
+        width: 100%;
+        display: table;
+        margin-bottom: 15px;
       }
       
       .recommendation-card {
+        display: table-cell;
+        width: 50%;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 20px;
+        border-radius: 6px;
+        padding: 15px;
+        vertical-align: top;
+        margin-right: 10px;
+        page-break-inside: avoid;
+      }
+      
+      .recommendation-card:last-child {
+        margin-right: 0;
+      }
+      
+      .recommendation-card:only-child {
+        width: 100%;
       }
       
       .priority-high {
-        border-left: 4px solid #dc2626;
+        border-left: 3px solid #dc2626;
       }
       
       .priority-medium {
-        border-left: 4px solid #d97706;
+        border-left: 3px solid #d97706;
       }
       
       .priority-low {
-        border-left: 4px solid #059669;
+        border-left: 3px solid #059669;
       }
       
       .recommendation-title {
         font-weight: bold;
-        margin-bottom: 10px;
-        font-size: 16px;
+        margin-bottom: 8px;
+        font-size: 13px;
+        line-height: 1.3;
       }
       
       .recommendation-impact {
-        font-size: 12px;
+        font-size: 10px;
         font-weight: bold;
         text-transform: uppercase;
-        padding: 4px 8px;
-        border-radius: 4px;
+        padding: 2px 6px;
+        border-radius: 3px;
         display: inline-block;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
       }
       
       .impact-high { color: #dc2626; background: #fecaca; }
       .impact-medium { color: #d97706; background: #fef3c7; }
       .impact-low { color: #059669; background: #dcfce7; }
       
-      .web-vitals-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-        gap: 20px;
-        margin-bottom: 30px;
+      /* Print-specific styles */
+      @media print {
+        body { -webkit-print-color-adjust: exact; }
+        .page { page-break-after: always; }
+        .page:last-child { page-break-after: auto; }
+        .footer { position: fixed; }
       }
       
-      .vital-card {
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        padding: 20px;
+      /* Ensure content doesn't break across pages */
+      .metric-card, .vital-card, .issue-item, .recommendation-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
       }
       
-      .vital-name {
-        font-size: 14px;
-        color: var(--secondary-color);
-        margin-bottom: 5px;
-      }
-      
-      .vital-value {
-        font-size: 28px;
-        font-weight: bold;
-        margin-bottom: 5px;
-      }
-      
-      .vital-threshold {
-        font-size: 12px;
-        color: var(--secondary-color);
-      }
-      
-      .summary-stats {
-        background: linear-gradient(135deg, var(--primary-color), #1e40af);
-        color: white;
-        border-radius: 12px;
-        padding: 30px;
-        margin-bottom: 30px;
-        text-align: center;
-      }
-      
-      .summary-stats h3 {
-        font-size: 24px;
-        margin-bottom: 20px;
-      }
-      
-      .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 20px;
-      }
-      
-      .stat-item {
-        text-align: center;
-      }
-      
-      .stat-value {
-        font-size: 32px;
-        font-weight: bold;
-        display: block;
-      }
-      
-      .stat-label {
-        font-size: 14px;
-        opacity: 0.9;
+      h1, h2, h3, .section-title, .report-title {
+        break-after: avoid;
+        page-break-after: avoid;
       }
     `;
   }
@@ -449,16 +559,18 @@ export class HTMLTemplateService {
   private generateHeaderSection(branding: BrandingConfig, websiteUrl: string, completedAt: Date): string {
     return `
       <div class="header">
-        <div class="logo-section">
-          ${branding.logoUrl ? 
-            `<img src="${branding.logoUrl}" alt="${branding.companyName || 'Company'} Logo">` : 
-            `<div class="company-name">${branding.companyName || 'SEO Report'}</div>`
-          }
-        </div>
-        <div class="company-info">
-          ${branding.companyName ? `<div class="company-name">${branding.companyName}</div>` : ''}
-          ${branding.website ? `<div>${branding.website}</div>` : ''}
-          ${branding.contactEmail ? `<div>${branding.contactEmail}</div>` : ''}
+        <div class="header-content">
+          <div class="logo-section">
+            ${branding.logoUrl ? 
+              `<img src="${branding.logoUrl}" alt="${branding.companyName || 'Company'} Logo">` : 
+              `<div class="company-name">${branding.companyName || 'SEO Report'}</div>`
+            }
+          </div>
+          <div class="company-info">
+            ${branding.companyName ? `<div class="company-name">${branding.companyName}</div>` : ''}
+            ${branding.website ? `<div style="font-size: 11px;">${branding.website}</div>` : ''}
+            ${branding.contactEmail ? `<div style="font-size: 11px;">${branding.contactEmail}</div>` : ''}
+          </div>
         </div>
       </div>
       
@@ -544,29 +656,31 @@ export class HTMLTemplateService {
     return `
       <div class="section">
         <div class="section-title">Key Performance Metrics</div>
-        <div class="metrics-grid">
-          <div class="metric-card">
-            <div class="metric-label">Performance</div>
-            <div class="metric-value value-${getScoreClass(results.performanceScore || 0).replace('score-', '')}">${results.performanceScore || 0}</div>
-            <div class="metric-status ${getScoreClass(results.performanceScore || 0)}">${getScoreStatus(results.performanceScore || 0)}</div>
-          </div>
-          
-          <div class="metric-card">
-            <div class="metric-label">SEO</div>
-            <div class="metric-value value-${getScoreClass(results.seoScore || 0).replace('score-', '')}">${results.seoScore || 0}</div>
-            <div class="metric-status ${getScoreClass(results.seoScore || 0)}">${getScoreStatus(results.seoScore || 0)}</div>
-          </div>
-          
-          <div class="metric-card">
-            <div class="metric-label">Accessibility</div>
-            <div class="metric-value value-${getScoreClass(results.accessibilityScore || 0).replace('score-', '')}">${results.accessibilityScore || 0}</div>
-            <div class="metric-status ${getScoreClass(results.accessibilityScore || 0)}">${getScoreStatus(results.accessibilityScore || 0)}</div>
-          </div>
-          
-          <div class="metric-card">
-            <div class="metric-label">Best Practices</div>
-            <div class="metric-value value-${getScoreClass(results.bestPracticesScore || 0).replace('score-', '')}">${results.bestPracticesScore || 0}</div>
-            <div class="metric-status ${getScoreClass(results.bestPracticesScore || 0)}">${getScoreStatus(results.bestPracticesScore || 0)}</div>
+        <div class="metrics-container">
+          <div class="metrics-row">
+            <div class="metric-card">
+              <div class="metric-label">Performance</div>
+              <div class="metric-value value-${getScoreClass(results.performanceScore || 0).replace('score-', '')}">${results.performanceScore || 0}</div>
+              <div class="metric-status ${getScoreClass(results.performanceScore || 0)}">${getScoreStatus(results.performanceScore || 0)}</div>
+            </div>
+            
+            <div class="metric-card">
+              <div class="metric-label">SEO</div>
+              <div class="metric-value value-${getScoreClass(results.seoScore || 0).replace('score-', '')}">${results.seoScore || 0}</div>
+              <div class="metric-status ${getScoreClass(results.seoScore || 0)}">${getScoreStatus(results.seoScore || 0)}</div>
+            </div>
+            
+            <div class="metric-card">
+              <div class="metric-label">Accessibility</div>
+              <div class="metric-value value-${getScoreClass(results.accessibilityScore || 0).replace('score-', '')}">${results.accessibilityScore || 0}</div>
+              <div class="metric-status ${getScoreClass(results.accessibilityScore || 0)}">${getScoreStatus(results.accessibilityScore || 0)}</div>
+            </div>
+            
+            <div class="metric-card">
+              <div class="metric-label">Best Practices</div>
+              <div class="metric-value value-${getScoreClass(results.bestPracticesScore || 0).replace('score-', '')}">${results.bestPracticesScore || 0}</div>
+              <div class="metric-status ${getScoreClass(results.bestPracticesScore || 0)}">${getScoreStatus(results.bestPracticesScore || 0)}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -650,46 +764,70 @@ export class HTMLTemplateService {
       return 'needs-improvement';
     };
 
+    const vitals = [];
+    
+    if (metrics?.loadTime) {
+      vitals.push({
+        name: 'Page Load Time',
+        value: `${(metrics.loadTime / 1000).toFixed(1)}s`,
+        status: getVitalStatus(metrics.loadTime, {good: 2000, needs: 4000}),
+        threshold: 'Good: < 2.0s | Needs Improvement: < 4.0s'
+      });
+    }
+    
+    if (pageSpeedMetrics?.largestContentfulPaint) {
+      vitals.push({
+        name: 'Largest Contentful Paint',
+        value: `${(pageSpeedMetrics.largestContentfulPaint / 1000).toFixed(1)}s`,
+        status: getVitalStatus(pageSpeedMetrics.largestContentfulPaint, {good: 2500, needs: 4000}),
+        threshold: 'Good: < 2.5s | Needs Improvement: < 4.0s'
+      });
+    }
+    
+    if (metrics?.cumulativeLayoutShift !== undefined) {
+      vitals.push({
+        name: 'Cumulative Layout Shift',
+        value: metrics.cumulativeLayoutShift.toFixed(3),
+        status: getVitalStatus(metrics.cumulativeLayoutShift, {good: 0.1, needs: 0.25}),
+        threshold: 'Good: < 0.1 | Needs Improvement: < 0.25'
+      });
+    }
+    
+    if (pageSpeedMetrics?.firstInputDelay) {
+      vitals.push({
+        name: 'First Input Delay',
+        value: `${pageSpeedMetrics.firstInputDelay}ms`,
+        status: getVitalStatus(pageSpeedMetrics.firstInputDelay, {good: 100, needs: 300}),
+        threshold: 'Good: < 100ms | Needs Improvement: < 300ms'
+      });
+    }
+
+    // Split vitals into rows of 3
+    const rows = [];
+    for (let i = 0; i < vitals.length; i += 3) {
+      rows.push(vitals.slice(i, i + 3));
+    }
+
     return `
       <div class="section">
         <div class="section-title">Core Web Vitals</div>
-        <p style="margin-bottom: 20px;">
+        <p style="margin-bottom: 15px; font-size: 11px; line-height: 1.4;">
           Core Web Vitals are Google's metrics for measuring user experience quality. 
           These metrics directly impact your search rankings.
         </p>
         
-        <div class="web-vitals-grid">
-          ${metrics?.loadTime ? `
-            <div class="vital-card">
-              <div class="vital-name">Page Load Time</div>
-              <div class="vital-value value-${getVitalStatus(metrics.loadTime, {good: 2000, needs: 4000})}">${(metrics.loadTime / 1000).toFixed(1)}s</div>
-              <div class="vital-threshold">Good: &lt; 2.0s | Needs Improvement: &lt; 4.0s</div>
+        <div class="web-vitals-container">
+          ${rows.map(row => `
+            <div class="web-vitals-row">
+              ${row.map(vital => `
+                <div class="vital-card">
+                  <div class="vital-name">${vital.name}</div>
+                  <div class="vital-value value-${vital.status}">${vital.value}</div>
+                  <div class="vital-threshold">${vital.threshold}</div>
+                </div>
+              `).join('')}
             </div>
-          ` : ''}
-          
-          ${pageSpeedMetrics?.largestContentfulPaint ? `
-            <div class="vital-card">
-              <div class="vital-name">Largest Contentful Paint</div>
-              <div class="vital-value value-${getVitalStatus(pageSpeedMetrics.largestContentfulPaint, {good: 2500, needs: 4000})}">${(pageSpeedMetrics.largestContentfulPaint / 1000).toFixed(1)}s</div>
-              <div class="vital-threshold">Good: &lt; 2.5s | Needs Improvement: &lt; 4.0s</div>
-            </div>
-          ` : ''}
-          
-          ${metrics?.cumulativeLayoutShift !== undefined ? `
-            <div class="vital-card">
-              <div class="vital-name">Cumulative Layout Shift</div>
-              <div class="vital-value value-${getVitalStatus(metrics.cumulativeLayoutShift, {good: 0.1, needs: 0.25})}">${metrics.cumulativeLayoutShift.toFixed(3)}</div>
-              <div class="vital-threshold">Good: &lt; 0.1 | Needs Improvement: &lt; 0.25</div>
-            </div>
-          ` : ''}
-          
-          ${pageSpeedMetrics?.firstInputDelay ? `
-            <div class="vital-card">
-              <div class="vital-name">First Input Delay</div>
-              <div class="vital-value value-${getVitalStatus(pageSpeedMetrics.firstInputDelay, {good: 100, needs: 300})}">${pageSpeedMetrics.firstInputDelay}ms</div>
-              <div class="vital-threshold">Good: &lt; 100ms | Needs Improvement: &lt; 300ms</div>
-            </div>
-          ` : ''}
+          `).join('')}
         </div>
       </div>
     `;
@@ -934,27 +1072,29 @@ export class HTMLTemplateService {
         <div class="section-title">Audit Summary</div>
         <div class="summary-stats">
           <h3>Analysis Results</h3>
-          <div class="stats-grid">
-            <div class="stat-item">
-              <span class="stat-value">${results.pagesCrawled || 1}</span>
-              <span class="stat-label">Pages Analyzed</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">${totalIssues}</span>
-              <span class="stat-label">Total Issues</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">${highPriorityIssues}</span>
-              <span class="stat-label">High Priority</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">${mediumPriorityIssues + lowPriorityIssues}</span>
-              <span class="stat-label">Other Issues</span>
+          <div class="stats-container">
+            <div class="stats-row">
+              <div class="stat-item">
+                <span class="stat-value">${results.pagesCrawled || 1}</span>
+                <span class="stat-label">Pages Analyzed</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-value">${totalIssues}</span>
+                <span class="stat-label">Total Issues</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-value">${highPriorityIssues}</span>
+                <span class="stat-label">High Priority</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-value">${mediumPriorityIssues + lowPriorityIssues}</span>
+                <span class="stat-label">Other Issues</span>
+              </div>
             </div>
           </div>
         </div>
         
-        <p style="font-size: 16px; line-height: 1.8; margin-bottom: 20px;">
+        <p style="font-size: 11px; line-height: 1.6; margin-bottom: 15px;">
           This audit provides a comprehensive analysis of your website's performance, SEO, accessibility, 
           and adherence to best practices. The identified issues are categorized by priority to help you 
           focus on the most impactful improvements first.
@@ -964,41 +1104,58 @@ export class HTMLTemplateService {
   }
 
   private generateRecommendations(results: AuditResults): string {
-    const highPriorityIssues = results.issues.filter((issue: AuditIssue) => issue.impact === 'HIGH').slice(0, 3);
-    const mediumPriorityIssues = results.issues.filter((issue: AuditIssue) => issue.impact === 'MEDIUM').slice(0, 3);
+    const highPriorityIssues = results.issues.filter((issue: AuditIssue) => issue.impact === 'HIGH').slice(0, 4);
+    const mediumPriorityIssues = results.issues.filter((issue: AuditIssue) => issue.impact === 'MEDIUM').slice(0, 4);
+    
+    // Split recommendations into rows of 2
+    const splitIntoRows = (items: any[]) => {
+      const rows = [];
+      for (let i = 0; i < items.length; i += 2) {
+        rows.push(items.slice(i, i + 2));
+      }
+      return rows;
+    };
     
     return `
       <div class="section">
         <div class="section-title">Priority Recommendations</div>
         
         ${highPriorityIssues.length > 0 ? `
-          <h3 style="color: #dc2626; margin-bottom: 15px;">High Priority (Immediate Action)</h3>
-          <div class="recommendations-grid">
-            ${highPriorityIssues.map((issue: AuditIssue, index: number) => `
-              <div class="recommendation-card priority-high">
-                <div class="recommendation-title">${index + 1}. ${issue.title}</div>
-                <div class="recommendation-impact impact-high">High Impact</div>
-                <p>${issue.recommendation}</p>
+          <h3 style="color: #dc2626; margin-bottom: 12px; font-size: 14px;">High Priority (Immediate Action)</h3>
+          <div class="recommendations-container">
+            ${splitIntoRows(highPriorityIssues).map(row => `
+              <div class="recommendations-row">
+                ${row.map((issue: AuditIssue, index: number) => `
+                  <div class="recommendation-card priority-high">
+                    <div class="recommendation-title">${highPriorityIssues.indexOf(issue) + 1}. ${issue.title}</div>
+                    <div class="recommendation-impact impact-high">High Impact</div>
+                    <p style="font-size: 11px; line-height: 1.4;">${issue.recommendation}</p>
+                  </div>
+                `).join('')}
               </div>
             `).join('')}
           </div>
         ` : ''}
         
         ${mediumPriorityIssues.length > 0 ? `
-          <h3 style="color: #d97706; margin: 30px 0 15px 0;">Medium Priority (Next Phase)</h3>
-          <div class="recommendations-grid">
-            ${mediumPriorityIssues.map((issue: AuditIssue, index: number) => `
-              <div class="recommendation-card priority-medium">
-                <div class="recommendation-title">${index + 1}. ${issue.title}</div>
-                <div class="recommendation-impact impact-medium">Medium Impact</div>
-                <p>${issue.recommendation}</p>
+          <h3 style="color: #d97706; margin: 20px 0 12px 0; font-size: 14px;">Medium Priority (Next Phase)</h3>
+          <div class="recommendations-container">
+            ${splitIntoRows(mediumPriorityIssues).map(row => `
+              <div class="recommendations-row">
+                ${row.map((issue: AuditIssue, index: number) => `
+                  <div class="recommendation-card priority-medium">
+                    <div class="recommendation-title">${mediumPriorityIssues.indexOf(issue) + 1}. ${issue.title}</div>
+                    <div class="recommendation-impact impact-medium">Medium Impact</div>
+                    <p style="font-size: 11px; line-height: 1.4;">${issue.recommendation}</p>
+                  </div>
+                `).join('')}
               </div>
             `).join('')}
           </div>
         ` : ''}
         
         ${highPriorityIssues.length === 0 && mediumPriorityIssues.length === 0 ? `
-          <div style="text-align: center; padding: 40px; background: #f0f9ff; border-radius: 8px; color: #0c4a6e;">
+          <div style="text-align: center; padding: 30px; background: #f0f9ff; border-radius: 6px; color: #0c4a6e;">
             <strong>Excellent work!</strong> No high or medium priority issues were identified. 
             Your website demonstrates strong performance across all audit categories.
           </div>
@@ -1010,12 +1167,12 @@ export class HTMLTemplateService {
   private generateFooter(branding: BrandingConfig, auditId: string): string {
     return `
       <div class="footer">
-        <div>
+        <div class="footer-left">
           ${branding.companyName ? `Generated by ${branding.companyName} | ` : ''}
           Powered by Meizo
         </div>
-        <div>
-          Audit ID: ${auditId} | Page <span class="page-number"></span>
+        <div class="footer-right">
+          Audit ID: ${auditId}
         </div>
       </div>
     `;
