@@ -45,41 +45,36 @@ ${this.getCustomStyles(primaryColor, secondaryColor)}
 ${this.generateHeaderSection(branding, websiteUrl, completedAt)}
 ${this.generateExecutiveSummary(results)}
 ${this.generateKeyMetrics(results)}
-${this.generateTopIssues(results.issues.slice(0, 5))}
+${this.generateTopIssues(results.issues.slice(0, 8))}
 ${this.generateFooter(branding, auditId)}
 </div>
 <div class="page-break"></div>
 <div class="page performance-analysis">
-${this.generatePageHeader('Performance Analysis', branding)}
+${this.generatePageHeader('Performance', branding)}
 ${this.generatePerformanceSection(results)}
 ${this.generateWebVitalsSection(results)}
+${this.generateSEOIssues(results.issues.filter((issue: AuditIssue) => issue.category === 'PERFORMANCE'))}
 ${this.generateFooter(branding, auditId)}
 </div>
 <div class="page-break"></div>
 <div class="page seo-analysis">
-${this.generatePageHeader('SEO Analysis', branding)}
+${this.generatePageHeader('SEO', branding)}
 ${this.generateSEOSection(results)}
 ${this.generateSEOIssues(results.issues.filter((issue: AuditIssue) => issue.category === 'SEO'))}
 ${this.generateFooter(branding, auditId)}
 </div>
 <div class="page-break"></div>
 <div class="page accessibility-analysis">
-${this.generatePageHeader('Accessibility Analysis', branding)}
+${this.generatePageHeader('Accessibility', branding)}
 ${this.generateAccessibilitySection(results)}
 ${this.generateAccessibilityIssues(results.issues.filter((issue: AuditIssue) => issue.category === 'ACCESSIBILITY'))}
 ${this.generateFooter(branding, auditId)}
 </div>
 <div class="page-break"></div>
 <div class="page best-practices-analysis">
-${this.generatePageHeader('Best Practices Analysis', branding)}
+${this.generatePageHeader('Best Practices', branding)}
 ${this.generateBestPracticesSection(results)}
 ${this.generateBestPracticesIssues(results.issues.filter((issue: AuditIssue) => issue.category === 'BEST_PRACTICES'))}
-${this.generateFooter(branding, auditId)}
-</div>
-<div class="page-break"></div>
-<div class="page detailed-issues">
-${this.generatePageHeader('Detailed Issues & Recommendations', branding)}
-${this.generateDetailedIssues(results.issues)}
 ${this.generateFooter(branding, auditId)}
 </div>
 <div class="page-break"></div>
@@ -351,6 +346,7 @@ body {
   color: var(--secondary-color);
   overflow: hidden;
   line-height: 1.2;
+  font-weight: 400;
 }
 
 .footer-left {
@@ -585,42 +581,34 @@ strong {
   }
 
   private generateHeaderSection(branding: BrandingConfig, websiteUrl: string, completedAt: Date): string {
-    return `
-      <div class="header">
-        <div class="header-content">
-          <div class="logo-section">
-            ${branding.logoUrl ? 
-              `<img src="${branding.logoUrl}" alt="${branding.companyName || 'Company'} Logo">` : 
-              `<div class="company-name">${branding.companyName || 'SEO Report'}</div>`
-            }
-          </div>
-          <div class="company-info">
-            ${branding.companyName ? `<div class="company-name">${branding.companyName}</div>` : ''}
-            ${branding.website ? `<div style="font-size: 11px;">${branding.website}</div>` : ''}
-            ${branding.contactEmail ? `<div style="font-size: 11px;">${branding.contactEmail}</div>` : ''}
-          </div>
-        </div>
-      </div>
-      
-      <div class="report-title">SEO Audit Report</div>
-      <div class="report-subtitle">${websiteUrl}</div>
-      <div class="report-date">Generated on ${completedAt.toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-      })}</div>
-    `;
+    return `<div class="header">
+<div class="header-content">
+<div class="logo-section">
+${branding.logoUrl ? 
+  `<img src="${branding.logoUrl}" alt="${branding.companyName || 'Company'} Logo">` : 
+  `<div class="company-name">${branding.companyName || 'SEO Report'}</div>`
+}
+</div>
+<div class="company-info">
+${branding.companyName ? `<div class="company-name">${branding.companyName}</div>` : ''}
+${branding.website ? `<div style="font-size: 10px; line-height: 1.3;">${branding.website}</div>` : ''}
+${branding.contactEmail ? `<div style="font-size: 10px; line-height: 1.3;">${branding.contactEmail}</div>` : ''}
+</div>
+</div>
+</div>
+<div class="report-title">SEO Audit Report</div>
+<div class="report-subtitle">${websiteUrl}</div>
+<div class="report-date">Generated on ${completedAt.toLocaleDateString('en-US', { 
+  year: 'numeric', 
+  month: 'long', 
+  day: 'numeric' 
+})}</div>`;
   }
 
   private generatePageHeader(title: string, branding: BrandingConfig): string {
-    return `
-      <div class="header">
-        <div class="section-title">${title}</div>
-        <div class="company-info">
-          ${branding.companyName ? `<div class="company-name">${branding.companyName}</div>` : ''}
-        </div>
-      </div>
-    `;
+    return `<div class="header">
+<div class="section-title">${title}</div>
+</div>`;
   }
 
   private generateExecutiveSummary(results: AuditResults): string {
@@ -749,28 +737,21 @@ strong {
   private generatePerformanceSection(results: AuditResults): string {
     const performanceIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'PERFORMANCE');
     
-    return `
-      <div class="section">
-        <div class="section-title">Performance Overview</div>
-        <p style="margin-bottom: 20px;">
-          Performance directly impacts user experience, search rankings, and conversion rates. 
-          Your performance score of <strong>${results.performanceScore || 0}/100</strong> is based on 
-          key loading metrics and user experience indicators.
-        </p>
-        
-        ${performanceIssues.length > 0 ? `
-          <div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Performance Impact:</strong> We found ${performanceIssues.length} performance-related 
-            issue${performanceIssues.length > 1 ? 's' : ''} that could be affecting your website's loading speed and user experience.
-          </div>
-        ` : `
-          <div style="background: #dcfce7; border: 1px solid #059669; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Great Performance!</strong> Your website demonstrates excellent performance metrics 
-            with fast loading times and optimal user experience.
-          </div>
-        `}
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">Performance Metrics</div>
+<p style="margin-bottom: 14px;">
+Performance directly impacts user experience, search rankings, and conversion rates. 
+Your performance score of <strong>${results.performanceScore || 0}/100</strong> is based on 
+key loading metrics and user experience indicators.
+</p>
+${performanceIssues.length > 0 ? `<div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Performance Impact:</strong> We found ${performanceIssues.length} performance-related 
+issue${performanceIssues.length > 1 ? 's' : ''} that could be affecting your website's loading speed and user experience.
+</div>` : `<div style="background: #dcfce7; border: 1px solid #059669; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Great Performance!</strong> Your website demonstrates excellent performance metrics 
+with fast loading times and optimal user experience.
+</div>`}
+</div>`;
   }
 
   private generateWebVitalsSection(results: AuditResults): string {
@@ -864,174 +845,135 @@ strong {
   private generateSEOSection(results: AuditResults): string {
     const seoIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'SEO');
     
-    return `
-      <div class="section">
-        <div class="section-title">SEO Overview</div>
-        <p style="margin-bottom: 20px;">
-          Search Engine Optimization affects your website's visibility in search results. 
-          Your SEO score of <strong>${results.seoScore || 0}/100</strong> reflects how well 
-          your site follows SEO best practices and guidelines.
-        </p>
-        
-        ${seoIssues.length > 0 ? `
-          <div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>SEO Opportunities:</strong> We identified ${seoIssues.length} SEO improvement${seoIssues.length > 1 ? 's' : ''} 
-            that could help increase your search engine visibility and rankings.
-          </div>
-        ` : `
-          <div style="background: #dcfce7; border: 1px solid #059669; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Excellent SEO!</strong> Your website follows SEO best practices and is well-optimized for search engines.
-          </div>
-        `}
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">SEO Metrics</div>
+<p style="margin-bottom: 14px;">
+Search Engine Optimization affects your website's visibility in search results. 
+Your SEO score of <strong>${results.seoScore || 0}/100</strong> reflects how well 
+your site follows SEO best practices and guidelines.
+</p>
+${seoIssues.length > 0 ? `<div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>SEO Opportunities:</strong> We identified ${seoIssues.length} SEO improvement${seoIssues.length > 1 ? 's' : ''} 
+that could help increase your search engine visibility and rankings.
+</div>` : `<div style="background: #dcfce7; border: 1px solid #059669; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Excellent SEO!</strong> Your website follows SEO best practices and is well-optimized for search engines.
+</div>`}
+</div>`;
   }
 
   private generateSEOIssues(issues: AuditIssue[]): string {
     if (issues.length === 0) {
-      return `
-        <div class="section">
-          <div class="section-title">SEO Analysis Details</div>
-          <div style="text-align: center; padding: 40px; background: #f0f9ff; border-radius: 8px; color: #0c4a6e;">
-            No SEO issues found. Your website follows SEO best practices.
-          </div>
-        </div>
-      `;
+      return `<div class="section">
+<div class="section-title">Issues Found</div>
+<div style="text-align: center; padding: 30px; background: #f0f9ff; border-radius: 6px; color: #0c4a6e;">
+No issues found in this category.
+</div>
+</div>`;
     }
 
-    return `
-      <div class="section">
-        <div class="section-title">SEO Issues & Recommendations</div>
-        <ul class="issues-list">
-          ${issues.map(issue => `
-            <li class="issue-item issue-${issue.type.toLowerCase()}">
-              <div class="issue-header">
-                <div class="issue-title">${issue.title}</div>
-                <div class="issue-type type-${issue.type.toLowerCase()}">${issue.type}</div>
-              </div>
-              <div class="issue-description">${issue.description}</div>
-              <div class="issue-recommendation"><strong>Recommendation:</strong> ${issue.recommendation}</div>
-            </li>
-          `).join('')}
-        </ul>
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">Issues Found</div>
+<ul class="issues-list">
+${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
+<div class="issue-header">
+<div class="issue-title">${issue.title}</div>
+<div class="issue-type type-${issue.type.toLowerCase()}">${issue.type}</div>
+</div>
+<div class="issue-description">${issue.description}</div>
+<div class="issue-recommendation"><strong>Recommendation:</strong> ${issue.recommendation}</div>
+</li>`).join('')}
+</ul>
+</div>`;
   }
 
   private generateAccessibilitySection(results: AuditResults): string {
     const accessibilityIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'ACCESSIBILITY');
     
-    return `
-      <div class="section">
-        <div class="section-title">Accessibility Overview</div>
-        <p style="margin-bottom: 20px;">
-          Web accessibility ensures your site is usable by people with disabilities and follows WCAG guidelines. 
-          Your accessibility score of <strong>${results.accessibilityScore || 0}/100</strong> indicates 
-          how well your site serves users with various abilities and assistive technologies.
-        </p>
-        
-        ${accessibilityIssues.length > 0 ? `
-          <div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Accessibility Improvements Needed:</strong> We found ${accessibilityIssues.length} accessibility 
-            issue${accessibilityIssues.length > 1 ? 's' : ''} that could prevent some users from fully accessing your content.
-          </div>
-        ` : `
-          <div style="background: #dcfce7; border: 1px solid #059669; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Great Accessibility!</strong> Your website demonstrates excellent accessibility standards 
-            and is inclusive for users with disabilities.
-          </div>
-        `}
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">Accessibility Metrics</div>
+<p style="margin-bottom: 14px;">
+Web accessibility ensures your site is usable by people with disabilities and follows WCAG guidelines. 
+Your accessibility score of <strong>${results.accessibilityScore || 0}/100</strong> indicates 
+how well your site serves users with various abilities and assistive technologies.
+</p>
+${accessibilityIssues.length > 0 ? `<div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Accessibility Improvements Needed:</strong> We found ${accessibilityIssues.length} accessibility 
+issue${accessibilityIssues.length > 1 ? 's' : ''} that could prevent some users from fully accessing your content.
+</div>` : `<div style="background: #dcfce7; border: 1px solid #059669; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Great Accessibility!</strong> Your website demonstrates excellent accessibility standards 
+and is inclusive for users with disabilities.
+</div>`}
+</div>`;
   }
 
   private generateAccessibilityIssues(issues: AuditIssue[]): string {
     if (issues.length === 0) {
-      return `
-        <div class="section">
-          <div class="section-title">Accessibility Analysis Details</div>
-          <div style="text-align: center; padding: 40px; background: #f0f9ff; border-radius: 8px; color: #0c4a6e;">
-            No accessibility issues found. Your website follows WCAG guidelines.
-          </div>
-        </div>
-      `;
+      return `<div class="section">
+<div class="section-title">Issues Found</div>
+<div style="text-align: center; padding: 30px; background: #f0f9ff; border-radius: 6px; color: #0c4a6e;">
+No issues found in this category.
+</div>
+</div>`;
     }
 
-    return `
-      <div class="section">
-        <div class="section-title">Accessibility Issues & Recommendations</div>
-        <ul class="issues-list">
-          ${issues.map(issue => `
-            <li class="issue-item issue-${issue.type.toLowerCase()}">
-              <div class="issue-header">
-                <div class="issue-title">${issue.title}</div>
-                <div class="issue-type type-${issue.type.toLowerCase()}">${issue.type}</div>
-              </div>
-              <div class="issue-description">${issue.description}</div>
-              <div class="issue-recommendation"><strong>Recommendation:</strong> ${issue.recommendation}</div>
-            </li>
-          `).join('')}
-        </ul>
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">Issues Found</div>
+<ul class="issues-list">
+${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
+<div class="issue-header">
+<div class="issue-title">${issue.title}</div>
+<div class="issue-type type-${issue.type.toLowerCase()}">${issue.type}</div>
+</div>
+<div class="issue-description">${issue.description}</div>
+<div class="issue-recommendation"><strong>Recommendation:</strong> ${issue.recommendation}</div>
+</li>`).join('')}
+</ul>
+</div>`;
   }
 
   private generateBestPracticesSection(results: AuditResults): string {
     const bestPracticesIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'BEST_PRACTICES');
     
-    return `
-      <div class="section">
-        <div class="section-title">Best Practices Overview</div>
-        <p style="margin-bottom: 20px;">
-          Best practices ensure your website follows modern web standards for security, performance, and user experience. 
-          Your best practices score of <strong>${results.bestPracticesScore || 0}/100</strong> reflects 
-          compliance with current web development standards.
-        </p>
-        
-        ${bestPracticesIssues.length > 0 ? `
-          <div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Best Practices Improvements:</strong> We identified ${bestPracticesIssues.length} area${bestPracticesIssues.length > 1 ? 's' : ''} 
-            where your site could better follow modern web development best practices.
-          </div>
-        ` : `
-          <div style="background: #dcfce7; border: 1px solid #059669; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-            <strong>Excellent Standards!</strong> Your website follows modern web development best practices 
-            and maintains high standards for security and user experience.
-          </div>
-        `}
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">Best Practices Metrics</div>
+<p style="margin-bottom: 14px;">
+Best practices ensure your website follows modern web standards for security, performance, and user experience. 
+Your best practices score of <strong>${results.bestPracticesScore || 0}/100</strong> reflects 
+compliance with current web development standards.
+</p>
+${bestPracticesIssues.length > 0 ? `<div style="background: #fef3c7; border: 1px solid #d97706; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Best Practices Improvements:</strong> We identified ${bestPracticesIssues.length} area${bestPracticesIssues.length > 1 ? 's' : ''} 
+where your site could better follow modern web development best practices.
+</div>` : `<div style="background: #dcfce7; border: 1px solid #059669; border-radius: 6px; padding: 12px; margin-bottom: 14px;">
+<strong>Excellent Standards!</strong> Your website follows modern web development best practices 
+and maintains high standards for security and user experience.
+</div>`}
+</div>`;
   }
 
   private generateBestPracticesIssues(issues: AuditIssue[]): string {
     if (issues.length === 0) {
-      return `
-        <div class="section">
-          <div class="section-title">Best Practices Analysis Details</div>
-          <div style="text-align: center; padding: 40px; background: #f0f9ff; border-radius: 8px; color: #0c4a6e;">
-            No best practices issues found. Your website follows modern web standards.
-          </div>
-        </div>
-      `;
+      return `<div class="section">
+<div class="section-title">Issues Found</div>
+<div style="text-align: center; padding: 30px; background: #f0f9ff; border-radius: 6px; color: #0c4a6e;">
+No issues found in this category.
+</div>
+</div>`;
     }
 
-    return `
-      <div class="section">
-        <div class="section-title">Best Practices Issues & Recommendations</div>
-        <ul class="issues-list">
-          ${issues.map(issue => `
-            <li class="issue-item issue-${issue.type.toLowerCase()}">
-              <div class="issue-header">
-                <div class="issue-title">${issue.title}</div>
-                <div class="issue-type type-${issue.type.toLowerCase()}">${issue.type}</div>
-              </div>
-              <div class="issue-description">${issue.description}</div>
-              <div class="issue-recommendation"><strong>Recommendation:</strong> ${issue.recommendation}</div>
-            </li>
-          `).join('')}
-        </ul>
-      </div>
-    `;
+    return `<div class="section">
+<div class="section-title">Issues Found</div>
+<ul class="issues-list">
+${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
+<div class="issue-header">
+<div class="issue-title">${issue.title}</div>
+<div class="issue-type type-${issue.type.toLowerCase()}">${issue.type}</div>
+</div>
+<div class="issue-description">${issue.description}</div>
+<div class="issue-recommendation"><strong>Recommendation:</strong> ${issue.recommendation}</div>
+</li>`).join('')}
+</ul>
+</div>`;
   }
 
   private generateDetailedIssues(issues: AuditIssue[]): string {
