@@ -249,16 +249,16 @@ export class PDFService {
       format: options?.format ?? 'A4',
       landscape: options?.orientation === 'landscape',
       margin: {
-        top: options?.margin?.top ?? '15mm',
-        right: options?.margin?.right ?? '15mm', 
-        bottom: options?.margin?.bottom ?? (wantsHeaderFooter ? '20mm' : '15mm'),
-        left: options?.margin?.left ?? '15mm',
+        top: options?.margin?.top ?? '12mm',
+        right: options?.margin?.right ?? '12mm', 
+        bottom: options?.margin?.bottom ?? (wantsHeaderFooter ? '16mm' : '12mm'),
+        left: options?.margin?.left ?? '12mm',
       },
       displayHeaderFooter: wantsHeaderFooter,
       headerTemplate: safeHeader,
       footerTemplate: safeFooter,
       printBackground: options?.printBackground !== false,
-      scale: options?.scale ?? 0.8, // Slightly smaller scale for better fit
+      scale: options?.scale ?? 0.85, // Optimized scale for better content density
       timeout: config.requestTimeout ?? 60_000,
       // Additional options for better PDF generation
       omitBackground: false,
