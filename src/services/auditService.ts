@@ -996,6 +996,220 @@ export class AuditService {
 
         const accessibilityScore = accessibilityData.score;
 
+        // Best practices audit (updated implementation)
+        console.log('[audit] best practices checks');
+        const bestPracticesData = await page
+            .evaluate(() => {
+                try {
+                    let score = 0;
+                    let totalChecks = 0;
+                    const details: Array<{
+                        title: string;
+                        value: string | number;
+                        status: 'PASS' | 'FAIL' | 'WARNING';
+                        description: string;
+                    }> = [];
+
+                    // Check HTTPS (20% weight)
+                    const isHttps = location.protocol === 'https:';
+                    if (isHttps) score += 20;
+                    totalChecks++;
+                    
+                    details.push({
+                        title: 'HTTPS Usage',
+                        value: isHttps ? 'Enabled' : 'Disabled',
+                        status: isHttps ? 'PASS' : 'FAIL',
+                        description: isHttps ? 'Site uses secure HTTPS protocol' : 'Site should use HTTPS for security'
+                    });
+
+                    // Check for mixed content (10% weight)
+                    const images = Array.from(document.querySelectorAll('img[src]')) as HTMLImageElement[];
+                    const links = Array.from(document.querySelectorAll('link[href]')) as HTMLLinkElement[];
+                    const scripts = Array.from(document.querySelectorAll('script[src]')) as HTMLScriptElement[];
+                    
+                    let mixedContent = false;
+                    if (isHttps) {
+                        const allResources = [
+                            ...images.map(img => img.src),
+                            ...links.map(link => link.href),
+                            ...scripts.map(script => script.src)
+                        ].filter(url => url && url.startsWith('http:'));
+                        
+                        mixedContent = allResources.length > 0;
+                    }
+                    
+                    if (isHttps) {
+                        if (!mixedContent) score += 10;
+                        details.push({
+                            title: 'Mixed Content',
+                            value: mixedContent ? 'Detected' : 'None detected',
+                            status: mixedContent ? 'FAIL' : 'PASS',
+                            description: mixedContent ? 'HTTP resources found on HTTPS page' : 'All resources loaded securely'
+                        });
+                        totalChecks++;
+                    }
+
+                    // Check for deprecated HTML elements (10% weight)
+                    const deprecatedElements = document.querySelectorAll('font, center, marquee, blink');
+                    const hasDeprecated = deprecatedElements.length > 0;
+                    if (!hasDeprecated) score += 10;
+                    totalChecks++;
+
+                    details.push({
+                        title: 'Deprecated HTML Elements',
+                        value: hasDeprecated ? `${deprecatedElements.length} found` : 'None found',
+                        status: hasDeprecated ? 'FAIL' : 'PASS',
+                        description: hasDeprecated ? 'Deprecated HTML elements should be replaced with modern equivalents' : 'No deprecated HTML elements found'
+                    });
+
+                    // Check for proper doctype (10% weight)
+                    const doctype = document.doctype;
+                    const hasProperDoctype = doctype && doctype.name === 'html' && !doctype.publicId && !doctype.systemId;
+                    if (hasProperDoctype) score += 10;
+                    totalChecks++;
+
+                    details.push({
+                        title: 'HTML5 Doctype',
+                        value: hasProperDoctype ? 'Present' : 'Missing or invalid',
+                        status: hasProperDoctype ? 'PASS' : 'FAIL',
+                        description: hasProperDoctype ? 'Page uses proper HTML5 doctype' : 'Page should use HTML5 doctype: <!DOCTYPE html>'
+                    });
+
+                    // Check for character encoding (10% weight)
+                    const charsetMeta = document.querySelector('meta[charset], meta[http-equiv="Content-Type"]');
+                    const hasCharset = !!charsetMeta;
+                    if (hasCharset) score += 10;
+                    totalChecks++;
+
+                    details.push({
+                        title: 'Character Encoding',
+                        value: hasCharset ? 'Specified' : 'Missing',
+                        status: hasCharset ? 'PASS' : 'WARNING',
+                        description: hasCharset ? 'Character encoding is properly specified' : 'Consider adding <meta charset="utf-8"> for proper text rendering'
+                    });
+
+                    // Check for external link security (15% weight)
+                    const externalLinks = Array.from(document.querySelectorAll('a[href^="http"]')) as HTMLAnchorElement[];
+                    let unsafeExternalLinks = 0;
+                    
+                    for (const link of externalLinks) {
+                        const href = link.href;
+                        const hostname = new URL(href).hostname;
+                        if (hostname !== location.hostname) {
+                            const rel = link.getAttribute('rel') || '';
+                            if (!rel.includes('noopener') || !rel.includes('noreferrer')) {
+                                unsafeExternalLinks++;
+                            }
+                        }
+                    }
+
+                    const externalLinksScore = externalLinks.length === 0 ? 15 : 
+                        Math.max(0, 15 * (1 - (unsafeExternalLinks / externalLinks.length)));
+                    score += externalLinksScore;
+                    totalChecks++;
+
+                    details.push({
+                        title: 'External Link Security',
+                        value: externalLinks.length === 0 ? 'No external links' : 
+                               `${externalLinks.length - unsafeExternalLinks}/${externalLinks.length} secure`,
+                        status: unsafeExternalLinks === 0 ? 'PASS' : unsafeExternalLinks < externalLinks.length * 0.2 ? 'WARNING' : 'FAIL',
+                        description: unsafeExternalLinks === 0 ? 'All external links are properly secured' : 
+                                   `${unsafeExternalLinks} external links missing rel="noopener noreferrer"`
+                    });
+
+                    // Check for inline styles and scripts (10% weight)
+                    const inlineStyles = document.querySelectorAll('[style]').length;
+                    const inlineScripts = document.querySelectorAll('script:not([src])').length;
+                    const hasExcessiveInline = inlineStyles > 5 || inlineScripts > 2;
+                    
+                    if (!hasExcessiveInline) score += 10;
+                    totalChecks++;
+
+                    details.push({
+                        title: 'Inline Styles & Scripts',
+                        value: `${inlineStyles} styles, ${inlineScripts} scripts`,
+                        status: hasExcessiveInline ? 'WARNING' : 'PASS',
+                        description: hasExcessiveInline ? 
+                                   'Consider moving inline styles and scripts to external files for better maintainability' :
+                                   'Minimal use of inline styles and scripts'
+                    });
+
+                    // Check for favicon (5% weight)
+                    const favicon = document.querySelector('link[rel*="icon"]');
+                    const hasFavicon = !!favicon;
+                    if (hasFavicon) score += 5;
+                    totalChecks++;
+
+                    details.push({
+                        title: 'Favicon',
+                        value: hasFavicon ? 'Present' : 'Missing',
+                        status: hasFavicon ? 'PASS' : 'WARNING',
+                        description: hasFavicon ? 'Page has a favicon' : 'Consider adding a favicon for better user experience'
+                    });
+
+                    // Check for robots meta tag or robots.txt reference (10% weight)
+                    const robotsMeta = document.querySelector('meta[name="robots"]');
+                    const hasRobotsDirective = !!robotsMeta;
+                    if (hasRobotsDirective) score += 5; // Partial credit for having robots directive
+                    totalChecks++;
+
+                    details.push({
+                        title: 'Robots Directive',
+                        value: hasRobotsDirective ? 'Present' : 'Not specified',
+                        status: hasRobotsDirective ? 'PASS' : 'WARNING',
+                        description: hasRobotsDirective ? 'Page has robots meta directive' : 'Consider adding robots meta tag or robots.txt for SEO control'
+                    });
+
+                    return {
+                        score: Math.round(Math.max(0, Math.min(100, score))),
+                        details
+                    };
+                } catch (error) {
+                    console.error('Best practices evaluation error:', error);
+                    return { score: 75, details: [] }; // Fallback score
+                }
+            })
+            .catch((error) => {
+                console.error('Best practices evaluation failed:', error);
+                return { score: 75, details: [] };
+            });
+
+        const bestPracticesScore = bestPracticesData.score;
+
+        // Collect JavaScript errors and console warnings
+        console.log('[audit] collecting JavaScript errors and warnings');
+        const jsIssues = await page.evaluate(() => {
+            try {
+                const errors: string[] = [];
+                const warnings: string[] = [];
+                
+                // Check for global error handlers
+                if (window.onerror) {
+                    // We can't easily capture runtime errors in this context,
+                    // so we'll check for some common issues instead
+                }
+                
+                // Check for common problematic patterns
+                const scripts = Array.from(document.querySelectorAll('script:not([src])')).map(s => s.textContent || '');
+                let errorCount = 0;
+                let warningCount = 0;
+                
+                for (const script of scripts) {
+                    // Check for common error patterns
+                    if (script.includes('console.error') || script.includes('throw ')) errorCount++;
+                    if (script.includes('console.warn') || script.includes('deprecated')) warningCount++;
+                }
+                
+                // Check for missing alt attributes (these generate warnings)
+                const imgWithoutAlt = document.querySelectorAll('img:not([alt])').length;
+                if (imgWithoutAlt > 0) warningCount += imgWithoutAlt;
+                
+                return { errorCount, warningCount };
+            } catch {
+                return { errorCount: 0, warningCount: 0 };
+            }
+        });
+
         // Optional screenshot
         let screenshot: string | undefined;
         if (request.options?.includeScreenshot) {
@@ -1012,7 +1226,7 @@ export class AuditService {
             performanceScore,
             seoScore,
             accessibilityScore,
-            bestPracticesScore: 75,
+            bestPracticesScore,
             metrics: {
                 loadTime,
                 cumulativeLayoutShift: pageSpeedMetrics?.desktop?.cumulativeLayoutShift || 0,
@@ -1110,25 +1324,20 @@ export class AuditService {
                     items: accessibilityData.details
                 },
                 bestPractices: {
-                    score: 75,
+                    score: bestPracticesScore,
                     items: [
-                        {
-                            title: 'HTTPS Usage',
-                            value: request.websiteUrl.startsWith('https://') ? 'Enabled' : 'Disabled',
-                            status: request.websiteUrl.startsWith('https://') ? 'PASS' : 'FAIL' as 'PASS' | 'FAIL',
-                            description: request.websiteUrl.startsWith('https://') ? 'Site uses secure HTTPS protocol' : 'Site should use HTTPS for security'
-                        },
+                        ...bestPracticesData.details,
                         {
                             title: 'JavaScript Errors',
-                            value: 'Not detected',
-                            status: 'PASS' as 'PASS',
-                            description: 'No JavaScript errors detected during audit'
+                            value: jsIssues.errorCount === 0 ? 'None detected' : `${jsIssues.errorCount} detected`,
+                            status: jsIssues.errorCount === 0 ? 'PASS' : jsIssues.errorCount < 3 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                            description: jsIssues.errorCount === 0 ? 'No JavaScript errors detected during audit' : `${jsIssues.errorCount} potential JavaScript errors found`
                         },
                         {
                             title: 'Console Warnings',
-                            value: 'Minimal',
-                            status: 'PASS' as 'PASS',
-                            description: 'Few or no console warnings detected'
+                            value: jsIssues.warningCount === 0 ? 'None detected' : `${jsIssues.warningCount} detected`,
+                            status: jsIssues.warningCount === 0 ? 'PASS' : jsIssues.warningCount < 5 ? 'WARNING' : 'FAIL' as 'PASS' | 'WARNING' | 'FAIL',
+                            description: jsIssues.warningCount === 0 ? 'No console warnings detected' : `${jsIssues.warningCount} potential console warnings found`
                         }
                     ]
                 }
@@ -1143,7 +1352,7 @@ export class AuditService {
             performanceScore,
             seoScore,
             accessibilityScore,
-            bestPracticesScore: 75,
+            bestPracticesScore,
             loadTime,
             categoryDetails: results.categoryDetails,
             pageSpeedMetrics

@@ -9,6 +9,7 @@ import { auditRouter } from './routes/audit.js';
 import { pdfRouter } from './routes/pdf.js';
 import { reportRouter } from './routes/report.js';
 import { healthRouter } from './routes/health.js';
+import previewRouter from './routes/preview.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authMiddleware } from './middleware/auth.js';
 
@@ -71,6 +72,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Health check (no auth required)
 app.use('/health', healthRouter);
+
+// Preview routes (auth middleware applied within routes)
+app.use('/api/preview', previewRouter);
 
 // Protected routes
 app.use('/api/audit', authMiddleware, auditRouter);

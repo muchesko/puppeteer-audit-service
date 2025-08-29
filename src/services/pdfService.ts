@@ -48,6 +48,9 @@ export class PDFService {
   private async launchBrowser(): Promise<Browser> {
     const executablePath = this.pickExecutablePath();
 
+    // Create unique user data directory to avoid singleton lock conflicts
+    const uniqueDataDir = `/tmp/chrome-pdf-data-${process.pid}-${Date.now()}`;
+
     const args: string[] = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -58,7 +61,7 @@ export class PDFService {
       '--hide-scrollbars',
       '--mute-audio',
       '--disable-extensions',
-      '--user-data-dir=/tmp/chrome-pdf-data',
+      `--user-data-dir=${uniqueDataDir}`,
       // Additional stability flags for containerized environments
       '--disable-crashpad',
       '--disable-crash-reporter',

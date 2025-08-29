@@ -25,10 +25,10 @@ export class HTMLTemplateService {
    */
   generateHTMLReport(data: ReportData): string {
     const { results, branding, websiteUrl, completedAt, auditId } = data;
-    
+
     const primaryColor = branding.primaryColor || '#2563eb';
     const secondaryColor = branding.secondaryColor || '#64748b';
-    
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -129,7 +129,6 @@ body {
 }
 
 .header {
-  border-bottom: 1.5px solid var(--primary-color);
   padding-bottom: 10px;
   margin-bottom: 16px;
   overflow: hidden;
@@ -346,7 +345,7 @@ body {
   color: var(--secondary-color);
   overflow: hidden;
   line-height: 1.2;
-  font-weight: 400;
+  font-weight: 200;
 }
 
 .footer-left {
@@ -583,12 +582,6 @@ strong {
   private generateHeaderSection(branding: BrandingConfig, websiteUrl: string, completedAt: Date): string {
     return `<div class="header">
 <div class="header-content">
-<div class="logo-section">
-${branding.logoUrl ? 
-  `<img src="${branding.logoUrl}" alt="${branding.companyName || 'Company'} Logo">` : 
-  `<div class="company-name">${branding.companyName || 'SEO Report'}</div>`
-}
-</div>
 <div class="company-info">
 ${branding.companyName ? `<div class="company-name">${branding.companyName}</div>` : ''}
 ${branding.website ? `<div style="font-size: 10px; line-height: 1.3;">${branding.website}</div>` : ''}
@@ -598,11 +591,11 @@ ${branding.contactEmail ? `<div style="font-size: 10px; line-height: 1.3;">${bra
 </div>
 <div class="report-title">SEO Audit Report</div>
 <div class="report-subtitle">${websiteUrl}</div>
-<div class="report-date">Generated on ${completedAt.toLocaleDateString('en-US', { 
-  year: 'numeric', 
-  month: 'long', 
-  day: 'numeric' 
-})}</div>`;
+<div class="report-date">Generated on ${completedAt.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })}</div>`;
   }
 
   private generatePageHeader(title: string, branding: BrandingConfig): string {
@@ -639,10 +632,10 @@ ${branding.contactEmail ? `<div style="font-size: 10px; line-height: 1.3;">${bra
         <p style="font-size: 16px; line-height: 1.8; margin-bottom: 20px;">
           This comprehensive SEO audit analyzed your website across four critical dimensions: 
           Performance, SEO, Accessibility, and Best Practices. 
-          ${results.issues.length > 0 ? 
-            `We identified ${results.issues.length} issues that require attention, ranging from critical performance optimizations to accessibility improvements.` :
-            'Your website shows excellent compliance across all tested categories.'
-          }
+          ${results.issues.length > 0 ?
+        `We identified ${results.issues.length} issues that require attention, ranging from critical performance optimizations to accessibility improvements.` :
+        'Your website shows excellent compliance across all tested categories.'
+      }
         </p>
         
         ${results.issues.length > 0 ? `
@@ -736,9 +729,9 @@ ${branding.contactEmail ? `<div style="font-size: 10px; line-height: 1.3;">${bra
 
   private generatePerformanceSection(results: AuditResults): string {
     const performanceIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'PERFORMANCE');
-    
+
     return `<div class="section">
-<div class="section-title">Performance Metrics</div>
+<div class="section-title">Performance Overview</div>
 <p style="margin-bottom: 14px;">
 Performance directly impacts user experience, search rankings, and conversion rates. 
 Your performance score of <strong>${results.performanceScore || 0}/100</strong> is based on 
@@ -757,7 +750,7 @@ with fast loading times and optimal user experience.
   private generateWebVitalsSection(results: AuditResults): string {
     const metrics = results.metrics;
     const pageSpeedMetrics = results.pageSpeedMetrics;
-    
+
     if (!metrics && !pageSpeedMetrics) {
       return `
         <div class="section">
@@ -767,54 +760,54 @@ with fast loading times and optimal user experience.
       `;
     }
 
-    const getVitalStatus = (value: number, thresholds: {good: number, needs: number}) => {
+    const getVitalStatus = (value: number, thresholds: { good: number, needs: number }) => {
       if (value <= thresholds.good) return 'excellent';
       if (value <= thresholds.needs) return 'good';
       return 'needs-improvement';
     };
 
     const vitals = [];
-    
+
     if (metrics?.loadTime) {
       vitals.push({
         name: 'Page Load Time',
         value: `${(metrics.loadTime / 1000).toFixed(1)}s`,
-        status: getVitalStatus(metrics.loadTime, {good: 2000, needs: 4000}),
+        status: getVitalStatus(metrics.loadTime, { good: 2000, needs: 4000 }),
         threshold: 'Good: < 2.0s | Needs Improvement: < 4.0s'
       });
     }
-    
+
     if (pageSpeedMetrics?.largestContentfulPaint) {
       vitals.push({
         name: 'Largest Contentful Paint',
         value: `${(pageSpeedMetrics.largestContentfulPaint / 1000).toFixed(1)}s`,
-        status: getVitalStatus(pageSpeedMetrics.largestContentfulPaint, {good: 2500, needs: 4000}),
+        status: getVitalStatus(pageSpeedMetrics.largestContentfulPaint, { good: 2500, needs: 4000 }),
         threshold: 'Good: < 2.5s | Needs Improvement: < 4.0s'
       });
     }
-    
+
     if (metrics?.cumulativeLayoutShift !== undefined) {
       vitals.push({
         name: 'Cumulative Layout Shift',
         value: metrics.cumulativeLayoutShift.toFixed(3),
-        status: getVitalStatus(metrics.cumulativeLayoutShift, {good: 0.1, needs: 0.25}),
+        status: getVitalStatus(metrics.cumulativeLayoutShift, { good: 0.1, needs: 0.25 }),
         threshold: 'Good: < 0.1 | Needs Improvement: < 0.25'
       });
     }
-    
+
     if (pageSpeedMetrics?.firstInputDelay) {
       vitals.push({
         name: 'First Input Delay',
         value: `${pageSpeedMetrics.firstInputDelay}ms`,
-        status: getVitalStatus(pageSpeedMetrics.firstInputDelay, {good: 100, needs: 300}),
+        status: getVitalStatus(pageSpeedMetrics.firstInputDelay, { good: 100, needs: 300 }),
         threshold: 'Good: < 100ms | Needs Improvement: < 300ms'
       });
     }
 
     // Split vitals into rows of 3
     const rows = [];
-    for (let i = 0; i < vitals.length; i += 3) {
-      rows.push(vitals.slice(i, i + 3));
+    for (let i = 0; i < vitals.length; i += 2) {
+      rows.push(vitals.slice(i, i + 2));
     }
 
     return `
@@ -844,9 +837,9 @@ with fast loading times and optimal user experience.
 
   private generateSEOSection(results: AuditResults): string {
     const seoIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'SEO');
-    
+
     return `<div class="section">
-<div class="section-title">SEO Metrics</div>
+<div class="section-title">SEO Overview</div>
 <p style="margin-bottom: 14px;">
 Search Engine Optimization affects your website's visibility in search results. 
 Your SEO score of <strong>${results.seoScore || 0}/100</strong> reflects how well 
@@ -888,9 +881,9 @@ ${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
 
   private generateAccessibilitySection(results: AuditResults): string {
     const accessibilityIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'ACCESSIBILITY');
-    
+
     return `<div class="section">
-<div class="section-title">Accessibility Metrics</div>
+<div class="section-title">Accessibility Overview</div>
 <p style="margin-bottom: 14px;">
 Web accessibility ensures your site is usable by people with disabilities and follows WCAG guidelines. 
 Your accessibility score of <strong>${results.accessibilityScore || 0}/100</strong> indicates 
@@ -933,9 +926,9 @@ ${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
 
   private generateBestPracticesSection(results: AuditResults): string {
     const bestPracticesIssues = results.issues.filter((issue: AuditIssue) => issue.category === 'BEST_PRACTICES');
-    
+
     return `<div class="section">
-<div class="section-title">Best Practices Metrics</div>
+<div class="section-title">Best Practices Overview</div>
 <p style="margin-bottom: 14px;">
 Best practices ensure your website follows modern web standards for security, performance, and user experience. 
 Your best practices score of <strong>${results.bestPracticesScore || 0}/100</strong> reflects 
@@ -1076,7 +1069,7 @@ ${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
   private generateRecommendations(results: AuditResults): string {
     const highPriorityIssues = results.issues.filter((issue: AuditIssue) => issue.impact === 'HIGH').slice(0, 4);
     const mediumPriorityIssues = results.issues.filter((issue: AuditIssue) => issue.impact === 'MEDIUM').slice(0, 4);
-    
+
     // Split recommendations into rows of 2
     const splitIntoRows = (items: any[]) => {
       const rows = [];
@@ -1085,7 +1078,7 @@ ${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
       }
       return rows;
     };
-    
+
     return `
       <div class="section">
         <div class="section-title">Priority Recommendations</div>
@@ -1139,7 +1132,7 @@ ${issues.map(issue => `<li class="issue-item issue-${issue.type.toLowerCase()}">
       <div class="footer">
         <div class="footer-left">
           ${branding.companyName ? `Generated by ${branding.companyName} | ` : ''}
-          Powered by Meizo
+          Powered by Meizo.io
         </div>
         <div class="footer-right">
           Audit ID: ${auditId}
